@@ -25,6 +25,12 @@ import {
   type GameState, type FishInstance as LogicFish, type FishSpecies,
 } from './state';
 import { castTo, landBobber, getWave } from './cast';
+import {
+  attractRadius, attractRate, rollAttracted, rollNibble, shouldStartBite,
+  BAITS, type Bait,
+} from './bite';
+import { addXP, xpToNext, getLevel, getXP, anglerTitle } from './progress';
+import { RODS } from '@/data/items';
 import { initReel, updateReel } from './drill';
 import type { ReelState } from './drillTypes';
 import {
@@ -39,6 +45,7 @@ export interface SessionView {
   coins: number;
   gems: number;
   level: number;
+  title: string;
   xp: number;
   xpNeeded: number;
   streak: number;
@@ -55,6 +62,7 @@ export interface SessionCallbacks {
   onLost?(message: string): void;
   onView?(v: SessionView): void;
   onToast?(text: string): void;
+  onLevelUp?(level: number, title: string): void;
 }
 
 /**
@@ -186,12 +194,18 @@ export class Session {
     this.state = transition(this.state, { type: 'FINISH_CATCH' });
     this.hooked = null;
     this.hookedSpecies = null;
+    this.shoal.clearInterest();
   }
 
-  private currentRod(): { zone: number; radius: number } {
-    // The shop catalog is ported; until the equipment screen is wired the
-    // starter rod's numbers stand in.
-    return { zone: 0.3, radius: 1 };
+  /** the equipped rod from the ported catalog, falling back to the starter */
+  private currentRod(): (typeof RODS)[number] {
+    const id = this.save.equipped?.rod ?? RODS[0].id;
+    return RODS.find((r) => r.id === id) ?? RODS[0];
+  }
+
+  private currentBait(): Bait {
+    const id = this.save.equipped?.bait ?? BAITS[0].id;
+    return BAITS.find((b) => b.id === id) ?? BAITS[0];
   }
 
   // ---------------------------------------------------------------- update
@@ -227,40 +241,67 @@ export class Session {
    * Waiting. The bite rate comes from the pure bite module; what happens
    * here is only the picking of a fish and the tell that it is interested.
    */
+  /**
+   * Waiting for a bite.
+   *
+   * The rates are NOT invented here — every one of them comes from the
+   * ported `bite.ts`, which carries the old game's formula and each of its
+   * multipliers as a separately tested function: the rod's lure radius, the
+   * bait, the ramp with wait time, rain, the golden hour, the lockruf totem,
+   * the patience talent and the rarity penalty. An earlier version of this
+   * file guessed at "nearest fish within 90 px, 45 % nibble", which played
+   * nothing like the original.
+   */
   private updateWaiting(dt: number): void {
     const s = this.state;
-    this.nextBiteRoll -= dt;
+    s.waitTime += dt;
 
-    // bobber rides the wave
-    const by = getWave(s.bobberX, s.time, this.scene.horizonY);
-    s.bobberY = by;
+    // bobber rides the wave; the hook sinks toward its target depth
+    s.bobberY = getWave(s.bobberX, s.time, this.scene.horizonY);
     s.hookY += (s.hookTargetY - s.hookY) * Math.min(1, dt * 2.5);
 
-    if (this.nextBiteRoll > 0) return;
-    this.nextBiteRoll = 0.35;
+    const rod = this.currentRod();
+    const radius = attractRadius(layout.W, layout.H, rod.radius, 0, false);
 
-    // Which fish is close enough to notice the bait? The rod's lure radius
-    // decides, which is the stat the player currently cannot see — see
-    // docs/SPIEL-VORSCHLAEGE.md item 4.
-    const radius = 90 * this.currentRod().radius;
-    const near = this.shoal.nearest(s.bobberX, s.hookY, radius);
-    if (!near) return;
+    // Already-interested fish keep swimming in; the rest may become
+    // interested, at a rate that depends on what they are.
+    for (const f of this.shoal.fish) {
+      if (f.distant) continue;
+      const dx = s.bobberX - f.x;
+      const dy = s.hookY - f.y;
+      const dist = Math.hypot(dx, dy);
 
-    // steer it toward the bait, and nibble when it arrives
-    const dx = s.bobberX - near.x;
-    const dy = s.hookY - near.y;
-    const dist = Math.hypot(dx, dy);
-    near.dir = dx >= 0 ? 1 : -1;
-    near.x += Math.sign(dx) * Math.min(Math.abs(dx), 26 * dt * 6);
-    near.band += (((s.hookY - this.scene.horizonY) / Math.max(1, layout.H - this.scene.horizonY)) - near.band) * 0.25;
-
-    if (dist < 22) {
-      if (this.rng() < 0.45) {
-        sfx.nibble(panFor(near.x / layout.W));
-        this.scene.particles.bubbles(near.x, near.y, 2);
-        return;
+      if (!f.attracted) {
+        if (dist > radius) continue;
+        const rate = attractRate({
+          catches: this.save.stats?.catches ?? 0,
+          waitTime: s.waitTime,
+          raining: false,
+          goldenHour: false,
+          lockrufTotemActive: false,
+          geduldTalentRank: 0,
+          bait: this.currentBait(),
+          isBoss: !!f.sp.boss,
+          rarityIdx: rarityIndex(f.sp),
+        });
+        if (!rollAttracted(rate, dt, this.rng)) continue;
+        f.attracted = true;
+        f.turn = 0;                    // it has made up its mind
       }
-      this.beginBite(near);
+
+      // swim at the bait
+      f.turnTo = dx >= 0 ? 1 : -1;
+      if (f.dir !== f.turnTo && f.turn === 0) f.turn = 0.0001;
+      const speed = 26 + f.sp.speed * 30;
+      f.x += Math.sign(dx) * Math.min(Math.abs(dx), speed * dt);
+      const targetBand = (s.hookY - this.scene.horizonY) / Math.max(1, layout.H - this.scene.horizonY);
+      f.band += (targetBand - f.band) * Math.min(1, dt * 1.6);
+
+      if (rollNibble(dist, 1, dt, this.rng)) {
+        sfx.nibble(panFor(f.x / layout.W));
+        this.scene.particles.bubbles(f.x, f.y, 2);
+      }
+      if (shouldStartBite(dist, 1)) { this.beginBite(f); return; }
     }
   }
 
@@ -296,6 +337,7 @@ export class Session {
     if (s.biteTimer <= 0) {
       this.state = transition(s, { type: 'BITE_TIMEOUT' });
       this.hooked = null;
+      this.shoal.clearInterest();
       sfx.escape(panFor(s.bobberX / layout.W));
       this.cb.onToast?.('Entwischt!');
     }
@@ -378,7 +420,11 @@ export class Session {
     if (rarityIndex(sp) >= 3) this.scene.particles.confetti(bx, by - 40, 30);
     this.scene.particles.coins(bx, by - 20, Math.min(12, 3 + rarityIndex(sp) * 2), 60, 40);
 
-    this.applyRewards(result);
+    this.applyRewards(result, sp);
+    // The fish is out of the water now; leaving it swimming was a bug you
+    // only notice once, and then cannot unsee.
+    if (this.hooked) this.shoal.remove(this.hooked);
+
     this.cb.onCatch?.(result, sp, result.kg, this.hookedShiny, result.perfect);
   }
 
@@ -388,6 +434,7 @@ export class Session {
     this.state.streak = 0;
     this.tension.stop();
     this.hooked = null;
+    this.shoal.clearInterest();
 
     if (reason === 'lineSnapped') {
       sfx.snap(panFor(reel.anchorX / layout.W));
@@ -401,9 +448,34 @@ export class Session {
     void nearMiss;
   }
 
-  private applyRewards(r: CatchResult): void {
+  private applyRewards(r: CatchResult, sp: Species): void {
     this.save.coins = (this.save.coins ?? 0) + r.coins;
-    this.save.xp = (this.save.xp ?? 0) + r.xp;
+
+    // XP goes through the ported curve, which handles crossing several
+    // levels at once and returns what was gained — the level-up reward and
+    // its popup hang off that, not off a hand-rolled threshold.
+    const res = addXP(this.save, r.xp);
+    this.save = res.save;
+    for (const up of res.levelUps) {
+      sfx.levelUp();
+      this.cb.onToast?.(`Stufe ${up.level}: ${anglerTitle(up.level)}`);
+      this.cb.onLevelUp?.(up.level, anglerTitle(up.level));
+    }
+
+    // the dex: seen, caught, and the personal record
+    const dex = this.save.dex;
+    const entry = (dex[sp.id] ??= { count: 0, record: 0 });
+    entry.count += 1;
+    entry.record = Math.max(entry.record, r.kg);
+    if (this.hookedShiny) entry.shiny = (entry.shiny ?? 0) + 1;
+
+    const stats = this.save.stats;
+    stats.catches += 1;
+    stats.totalCoins += r.coins;
+    stats.biggestKg = Math.max(stats.biggestKg, r.kg);
+    if (r.perfect) stats.perfects += 1;
+    if (this.hookedShiny) stats.shinies += 1;
+
     saveSave(this.save);
   }
 
@@ -424,9 +496,10 @@ export class Session {
       phase: s.phase,
       coins: this.save.coins ?? 0,
       gems: this.save.gems ?? 0,
-      level: this.save.level ?? 1,
-      xp: this.save.xp ?? 0,
-      xpNeeded: 151,
+      level: getLevel(this.save),
+      title: anglerTitle(getLevel(this.save)),
+      xp: getXP(this.save),
+      xpNeeded: xpToNext(getLevel(this.save)),
       streak: s.streak,
       tension: s.reel?.tension ?? 0,
       progress: s.reel?.progress ?? 0,

@@ -72,6 +72,12 @@ export interface Fish {
   turnTo: number;
   /** seconds until this fish considers changing its mind */
   nextDecision: number;
+  /**
+   * True once this fish has noticed the bait and is swimming at it. Set by
+   * the session from the ported attraction roll; while it is set the fish
+   * ignores its own wandering.
+   */
+  attracted: boolean;
   /** atlas frame */
   fx: number;
   fy: number;
@@ -235,6 +241,7 @@ export class Shoal {
       turn: 0,
       turnTo: dir,
       nextDecision: 2 + this.rng() * 6,
+      attracted: false,
       fx: fr.fx, fy: fr.fy, fw: fr.fw, fh: fr.fh,
       inst: {
         x: 0, y: 0, w: fr.w, h: fr.h,
@@ -301,7 +308,7 @@ export class Shoal {
             if (f.turn >= 0.5 && f.dir !== f.turnTo) f.dir = f.turnTo;
             squash = Math.max(0.06, Math.abs(Math.cos(f.turn * Math.PI)));
           }
-        } else if (!f.distant) {
+        } else if (!f.distant && !f.attracted) {
           f.nextDecision -= dt;
           const nearEdge = f.x < 40 || f.x > layout.W - 40;
           if (f.nextDecision <= 0 || nearEdge) {
@@ -400,6 +407,17 @@ export class Shoal {
     li.alpha = body.alpha;
     void f;
     this.scene.pushFish(li);
+  }
+
+  /** takes a fish out of the water — it has been caught, or it fled */
+  remove(f: Fish): void {
+    const i = this.fish.indexOf(f);
+    if (i >= 0) this.fish.splice(i, 1);
+  }
+
+  /** every attracted fish forgets the bait (the line came in) */
+  clearInterest(): void {
+    for (const f of this.fish) f.attracted = false;
   }
 
   /** the interactive fish nearest to a point, for the cast and the lure */

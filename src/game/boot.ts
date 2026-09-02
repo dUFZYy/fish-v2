@@ -66,8 +66,9 @@ export async function startGame(): Promise<void> {
     onToast: (text) => hud.toast(text),
     onLost: (text) => hud.toast(text),
     onCatch: (r, sp) => {
-      hud.toast(`${sp.nameDe}  +${r.coins}`);
+      hud.toast(`${sp.nameDe} · ${r.kg.toFixed(2)} kg · +${r.coins}`);
     },
+    onLevelUp: (lvl, title) => hud.toast(`Stufe ${lvl} — ${title}`),
   });
 
   // --- ambient life --------------------------------------------------------
@@ -171,7 +172,7 @@ function hudStateFrom(session: Session, dayTime: number): HudState {
     clock: `${hh}:${mm}`,
     timeOfDay: night ? 'night' : dayTime > 0.68 ? 'dusk' : 'day',
     level: v.level,
-    anglerTitle: 'Anfänger',
+    anglerTitle: v.title,
     xp: v.xp,
     xpToNext: v.xpNeeded,
     rod: { name: 'Holzrute' },
