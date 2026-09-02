@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Angler — Montage-Probe</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: #0c1620; color: #e6e9ef;
+                 font: 13px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    body { display: flex; flex-direction: row; overflow: hidden; }
+    #game { position: relative; flex: 1 1 auto; min-width: 0; background: #06121c; }
+    #game canvas { display: block; }
+    #board { width: 300px; flex: 0 0 300px; overflow-y: auto; padding: 14px; background: #14181f;
+             border-left: 1px solid #2a2f3a; }
+    h1 { font-size: 15px; margin: 0 0 4px; }
+    p.hint { color: #9aa3b2; margin: 0 0 16px; }
+    h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #9aa3b2;
+         margin: 18px 0 8px; border-bottom: 1px solid #2a2f3a; padding-bottom: 4px; }
+    .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+    button { padding: 9px 6px; border: 1px solid #3a3f4a; border-radius: 6px; background: #23262f;
+             color: #e6e9ef; font: inherit; cursor: pointer; }
+    button.active { background: #ffd23a; color: #14181f; border-color: #ffd23a; font-weight: 600; }
+    button:active { transform: translateY(1px); }
+    label.row { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+    label.row span { width: 76px; color: #9aa3b2; flex: none; }
+    input[type=range] { flex: 1; }
+    output { width: 40px; text-align: right; font-variant-numeric: tabular-nums; }
+    label.check { display: flex; align-items: center; gap: 8px; margin: 8px 0; cursor: pointer; }
+    #readout { margin-top: 14px; padding: 8px; background: #1c2028; border-radius: 6px;
+               font: 11px/1.5 ui-monospace, monospace; color: #a8c6d2; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div id="game"></div>
+  <div id="board">
+    <h1>Angler</h1>
+    <p class="hint">Montageprobe: Baken + Anhängepunkte aus bake/anglerArt.ts, live zusammengesetzt.</p>
+    <h2>Pose</h2>
+    <div class="grid" id="poses"></div>
+    <h2>Regler</h2>
+    <div id="sliders"></div>
+    <h2>Angelschnur</h2>
+    <label class="check"><input type="checkbox" id="bobberOut"> Pose ausgeworfen (Schnur/Pose/Haken)</label>
+    <label class="check"><input type="checkbox" id="reflOn" checked> Spiegelung</label>
+    <div id="readout"></div>
+  </div>
+  <script type="module" src="/dev/anglerDev.ts"></script>
+</body>
+</html>

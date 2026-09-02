@@ -10,6 +10,8 @@ import { Weather } from '@/world/weather';
 import { Session } from './session';
 import { audio } from '@/audio/engine';
 import { sfx, panFor } from '@/audio/sfx';
+import { music } from '@/audio/music';
+import { setAmbience, setRain } from '@/audio/ambience';
 import { Hud, type HudState } from '@/ui/hud';
 import { Screens } from '@/ui/screens';
 import { CatchCard, LevelUpPopup } from '@/ui/catchCard';
@@ -37,6 +39,20 @@ export async function startGame(): Promise<void> {
   const frozenDay = p.has('day') ? Number(p.get('day')) : null;
 
   audio.attachLifecycle();
+
+  // Music and ambience can only start from a gesture (iOS), so they wait for
+  // the first touch rather than being started here and silently failing.
+  let soundStarted = false;
+  const startSound = () => {
+    if (soundStarted || !audio.ready) return;
+    soundStarted = true;
+    music.start();
+    music.setMood('see');
+    setAmbience(LAKE.id, false);
+  };
+  for (const ev of ['pointerdown', 'keydown'] as const) {
+    window.addEventListener(ev, () => { audio.init(); startSound(); }, { passive: true });
+  }
 
   const scene = new Scene(baker.sprites.textureSource, engine.W, engine.H, {
     onCoinArrive: (i) => sfx.coin(i),
@@ -128,6 +144,7 @@ export async function startGame(): Promise<void> {
         coins: r.coins,
       });
     },
+    onAchievement: (id) => hud.toast(`Erfolg: ${id}`),
     onLevelUp: (lvl, title) => {
       levelUp.show(uiHost, { level: lvl, title } as never);
       window.setTimeout(() => levelUp.hide(), 2600);
@@ -191,6 +208,23 @@ export async function startGame(): Promise<void> {
       lookY: Math.sin(t * 0.05) * 4,
       tier: engine.qualityTier,
     });
+
+    // --- the music follows the game rather than just playing over it -----
+    // Calm while the line is in, a lift while a fish is interested, and the
+    // drill's own tension pushed straight into the arrangement. The old
+    // engine only had a boss flag; this is the same idea generalised, and it
+    // is what makes a catch feel like the end of something.
+    if (soundStarted) {
+      const st2 = session.state;
+      const intensity =
+        st2.phase === 'reeling' ? 0.55 + (st2.reel?.tension ?? 0) * 0.45
+        : st2.phase === 'biting' ? 0.6
+        : st2.phase === 'caught' ? 0.35
+        : lineOut ? 0.18 : 0;
+      music.setIntensity(intensity);
+      music.setNight(sky.light < 0.35);
+      setRain(weather.gloom);
+    }
 
     hud.update(hudStateFrom(session, dayTime));
 

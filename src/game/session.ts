@@ -38,6 +38,9 @@ import {
 } from './catch';
 import type { Species } from '@/data/species';
 import { loadSave, saveSave, type SaveData } from './save';
+import { checkAchievements, type AchievementId } from './events';
+import { SPECIES } from '@/data/species';
+import { LOCATIONS } from '@/data/locations';
 
 /** what the HUD and the screens need from a running session */
 export interface SessionView {
@@ -65,6 +68,7 @@ export interface SessionCallbacks {
   onView?(v: SessionView): void;
   onToast?(text: string): void;
   onLevelUp?(level: number, title: string): void;
+  onAchievement?(id: string): void;
 }
 
 /**
@@ -547,7 +551,45 @@ export class Session {
     if (r.perfect) stats.perfects += 1;
     if (this.hookedShiny) stats.shinies += 1;
 
+    this.awardAchievements();
     saveSave(this.save);
+  }
+
+  /**
+   * The 37 achievements are ported with their conditions as predicates; they
+   * were simply never being checked. This is the one place that has all the
+   * numbers they ask about, so it is where the check belongs.
+   */
+  private awardAchievements(): void {
+    const sv = this.save;
+    const newly = checkAchievements({
+      catches: sv.stats.catches,
+      dex: sv.dex,
+      totalSpeciesCount: SPECIES.length,
+      biggestKg: sv.stats.biggestKg,
+      streak: this.state.streak,
+      perfects: sv.stats.perfects,
+      rainCatches: sv.stats.rainCatches,
+      totalCoins: sv.stats.totalCoins,
+      // owned.locations holds the bought ones; the starter lake is free and
+      // never appears there, so it is counted separately.
+      unlockedLocationsCount: (sv.owned?.locations?.length ?? 0) + 1,
+      totalLocationsCount: LOCATIONS.length,
+      level: getLevel(sv),
+      dexRewardKeys: Object.keys(sv.dexRewards ?? {}),
+      questsCompleted: sv.stats.quests,
+      gachasOpened: sv.stats.gachas,
+      shinies: sv.stats.shinies,
+      bossSpeciesIds: SPECIES.filter((x) => x.boss).map((x) => x.id),
+      tiefseeExclusiveSpeciesIds: SPECIES
+        .filter((x) => x.locations.length === 1 && x.locations[0] === 'tiefsee')
+        .map((x) => x.id),
+    }, sv.achievements as unknown as readonly AchievementId[]);
+
+    for (const id of newly) {
+      sv.achievements.push(id);
+      this.cb.onAchievement?.(id);
+    }
   }
 
   private updateRetrieving(dt: number): void {

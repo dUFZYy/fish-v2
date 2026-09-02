@@ -92,9 +92,11 @@ function boatSceneArt(loc: Location): SceneArt {
     seabed: (light) => (ctx, w, h) => boatArt.drawSeabed(ctx, w, h, light),
     waterTop: (light) => rgb01(paletteForLight(light, loc).wTop),
     waterBottom: (light) => rgb01(paletteForLight(light, loc).wBot),
+    // Measured (dev/locations.html, union across day/dusk/night): far ink at
+    // y 0.29..0.36, seabed at y 0.81..1.00. Padded by ~0.01 for safety.
     bands: {
-      far: { y: 0.24, h: 0.14 },
-      seabed: { y: 0.78, h: 0.22 },
+      far: { y: 0.28, h: 0.09 },
+      seabed: { y: 0.80, h: 0.20 },
     },
     deepSea: false,
   };
@@ -112,9 +114,10 @@ function coastSceneArt(loc: Location): SceneArt {
     seabed: (light) => (ctx, w, h) => coastArt.drawSeabed(ctx, w, h, light),
     waterTop: (light) => rgb01(paletteForLight(light, loc).wTop),
     waterBottom: (light) => rgb01(paletteForLight(light, loc).wBot),
+    // Measured: far ink at y 0.22..0.36, seabed at y 0.81..1.00.
     bands: {
-      far: { y: 0.16, h: 0.21 },
-      seabed: { y: 0.78, h: 0.22 },
+      far: { y: 0.21, h: 0.16 },
+      seabed: { y: 0.80, h: 0.20 },
     },
     deepSea: false,
   };
@@ -132,9 +135,11 @@ function reefSceneArt(loc: Location): SceneArt {
     seabed: (light) => (ctx, w, h) => reefArt.drawSeabed(ctx, w, h, light),
     waterTop: (light) => rgb01(paletteForLight(light, loc).wTop),
     waterBottom: (light) => rgb01(paletteForLight(light, loc).wBot),
+    // Measured: far ink at y 0.33..0.35 (a thin sliver — sand bank + hazy
+    // islands, all just below the horizon), seabed at y 0.81..1.00.
     bands: {
-      far: { y: 0.31, h: 0.06 },
-      seabed: { y: 0.78, h: 0.22 },
+      far: { y: 0.32, h: 0.04 },
+      seabed: { y: 0.80, h: 0.20 },
     },
     deepSea: false,
   };
@@ -165,9 +170,13 @@ function deepSceneArt(loc: Location): SceneArt {
     seabed: (light) => (ctx, w, h) => deepArt.drawSeabed(ctx, w, h, light),
     waterTop: (light) => rgb01(paletteForLight(light, loc).wTop),
     waterBottom: (light) => rgb01(paletteForLight(light, loc).wBot),
+    // Measured: far ink at y 0.37..1.00 (the canyon walls deliberately reach
+    // the bottom edge — same ~0.6H region the old game's own `drawDeepFar`
+    // bake used, `0, H*0.45, W, H*0.6`), seabed at y 0.73..1.00 (the smoker
+    // chimneys reach well above the floor itself).
     bands: {
-      far: { y: 0.45, h: 0.55 },
-      seabed: { y: 0.78, h: 0.22 },
+      far: { y: 0.36, h: 0.64 },
+      seabed: { y: 0.72, h: 0.28 },
     },
     deepSea: true,
   };
@@ -186,10 +195,13 @@ function arcticSceneArt(loc: Location): SceneArt {
     seabed: (light) => (ctx, w, h) => arcticArt.drawSeabed(ctx, w, h, light),
     waterTop: (light) => rgb01(paletteForLight(light, loc).wTop),
     waterBottom: (light) => rgb01(paletteForLight(light, loc).wBot),
+    // Measured: far (icebergs) at y 0.27..0.36, near (ice sheet) at y
+    // 0.36..0.50, seabed at y 0.50..1.00 (the icicles hang from just under
+    // the ice band, well above the floor rocks — one wide band covers both).
     bands: {
-      far: { y: 0.20, h: 0.17 },
-      near: { y: 0.32, h: 0.17 },
-      seabed: { y: 0.78, h: 0.22 },
+      far: { y: 0.26, h: 0.11 },
+      near: { y: 0.35, h: 0.16 },
+      seabed: { y: 0.49, h: 0.51 },
     },
     deepSea: false,
     // Water effects only start below the ice's physical underside — an open
@@ -276,10 +288,17 @@ export function makePier(horizonY: number, light: number): Sprite {
   const s = new Sprite(e.texture);
   s.setSize(w, h);
   s.x = layout.W - w;
-  // deckY (box-local) is 5/6 of the box height — see coastArt.drawPier.
+  // deckY (box-local) is 5/6 of the box height — see coastArt.drawPier. The
+  // deck's TOP edge sits 20px above the horizon, same convention `makeDock`
+  // (game/lake.ts) uses for its plank line.
   const deckY = (5 / 6) * h;
-  s.y = horizonY - deckY;
+  s.y = horizonY - 20 - deckY;
   return s;
+}
+
+/** World y of the pier deck's BOTTOM edge — where the submerged footing (`makePierUnderwater`) begins. */
+export function pierDeckBottom(horizonY: number): number {
+  return horizonY - 20 + PIER_H / 6;
 }
 
 /** The submerged pier footing, own box — a separate sprite, drawn before the water pass. */
@@ -293,7 +312,7 @@ export function makePierUnderwater(horizonY: number, light: number): Sprite {
   const s = new Sprite(e.texture);
   s.setSize(w, h);
   s.x = layout.W - w;
-  s.y = horizonY;
+  s.y = pierDeckBottom(horizonY);
   return s;
 }
 
