@@ -111,7 +111,11 @@ const BOTTOM_DWELLER: MotionProfile = {
  * plant in the water.
  */
 const BY_ID: Record<string, MotionProfile> = {
-  seetang: PLANT,
+  // Bycatch seaweed is a torn-off tangle drifting in the water, not a rooted
+  // plant: it has no base to hold still, so it tumbles like the other junk.
+  // The ROOTED weed at the lake bed is scenery (bake/lakeArt.ts) and is the
+  // one that gets Bend.Anchor.
+  seetang: { ...DRIFTER, rollAmp: 0.16, rollRate: 0.09, bobAmp: 5, bobRate: 0.5 },
   stiefel: SINKING_JUNK,
   taucherstiefel: SINKING_JUNK,
   flaschenpost: FLOATING_JUNK,
@@ -135,7 +139,7 @@ const BY_BODY: Record<string, MotionProfile> = {
   boot: SINKING_JUNK,
   bottle: FLOATING_JUNK,
   chest: HEAVY_JUNK,
-  weed: PLANT,
+  weed: { ...DRIFTER, rollAmp: 0.16, rollRate: 0.09, bobAmp: 5, bobRate: 0.5 },
   jelly: DRIFTER,
   star: BOTTOM_DWELLER,
   shell: BOTTOM_DWELLER,

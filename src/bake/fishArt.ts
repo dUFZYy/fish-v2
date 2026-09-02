@@ -108,10 +108,9 @@ function bodyBounds(sp: Species): Bounds {
         // rotated ~1 rad in place; bounded generously rather than rotating the box.
         case 'penguin': b = { xMin: -1.5, xMax: 1.5, yMin: -1.8 * hh, yMax: 1.8 * hh }; break;
         case 'serpent': b = { xMin: -2.45, xMax: 1.9, yMin: -2.9 * hh, yMax: 0.9 * hh }; break;
-        // The weed is rooted: its base must sit on the BOTTOM edge of the box,
-        // because world/motion.ts gives it the anchored bend mode and the
-        // shader holds the bottom row still.
-        case 'weed': b = { xMin: -1.35, xMax: 1.35, yMin: -2.45 * hh, yMax: 1.35 * hh }; break;
+        // Drifting tangle, drawn radiating from the centre, so the box is
+        // symmetric about the origin.
+        case 'weed': b = { xMin: -1.2, xMax: 1.2, yMin: -1.15 * hh, yMax: 1.15 * hh }; break;
         case 'blob': b = { xMin: -1.45, xMax: 1.35, yMin: -1.05 * hh, yMax: 1.2 * hh }; break;
         default: b = { xMin: -1.2, xMax: 1.2, yMin: -1.2 * hh, yMax: 1.2 * hh };
       }
@@ -490,36 +489,66 @@ function drawBoot(c: CanvasRenderingContext2D, L: number, col: Col): void {
   const mid = shadeColor(leather, -0.18);
   const light = shadeColor(leather, 0.2);
 
-  // --- sole, drawn first so the upper overlaps it ---
+  // --- sole ---
+  //
+  // The first attempt put five evenly spaced tread notches along the bottom,
+  // and they read as bite marks rather than as a sole: enough irregularity
+  // to look damaged, not enough to look deliberately damaged. So the sole is
+  // now clean and readable, and the wear is ONE unambiguous thing instead:
+  // the sole has come unstuck at the toe and hangs open. That is instantly
+  // legible at 40 px, and it is the detail that says "this has been in the
+  // water a long time" without needing a caption.
   const soleY = L * 0.74;
-  c.fillStyle = shadeColor(leather, -0.62);
+  const soleH = L * 0.15;
+
+  // heel block first — it sits behind the sole slab
+  c.fillStyle = shadeColor(leather, -0.72);
+  c.beginPath();
+  c.moveTo(-L * 0.44, soleY + soleH * 0.5);
+  c.lineTo(-L * 0.1, soleY + soleH * 0.5);
+  c.quadraticCurveTo(-L * 0.12, soleY + soleH * 1.9, -L * 0.2, soleY + soleH * 2.0);
+  c.lineTo(-L * 0.42, soleY + soleH * 2.0);
+  c.quadraticCurveTo(-L * 0.5, soleY + soleH * 1.9, -L * 0.44, soleY + soleH * 0.5);
+  c.closePath();
+  c.fill();
+
+  // the sole slab: stops SHORT of the toe, because the front has come away
+  const soleTip = L * 0.6;
+  c.fillStyle = shadeColor(leather, -0.6);
   c.beginPath();
   c.moveTo(-L * 0.46, soleY);
-  c.lineTo(L * 0.92, soleY);
-  c.quadraticCurveTo(L * 1.02, soleY + L * 0.06, L * 0.9, soleY + L * 0.13);
-  c.lineTo(-L * 0.3, soleY + L * 0.13);
-  c.quadraticCurveTo(-L * 0.5, soleY + L * 0.13, -L * 0.46, soleY);
+  c.lineTo(soleTip, soleY);
+  c.lineTo(soleTip + L * 0.04, soleY + soleH);
+  c.lineTo(-L * 0.3, soleY + soleH);
+  c.quadraticCurveTo(-L * 0.52, soleY + soleH, -L * 0.46, soleY);
   c.closePath();
   c.fill();
-  // heel block
-  c.fillStyle = shadeColor(leather, -0.7);
+
+  // the detached front piece, peeled downward and away from the upper
+  c.fillStyle = shadeColor(leather, -0.66);
   c.beginPath();
-  c.moveTo(-L * 0.44, soleY + L * 0.1);
-  c.lineTo(-L * 0.12, soleY + L * 0.1);
-  c.lineTo(-L * 0.16, soleY + L * 0.28);
-  c.lineTo(-L * 0.44, soleY + L * 0.28);
+  c.moveTo(soleTip, soleY + soleH * 0.15);
+  c.quadraticCurveTo(L * 0.84, soleY + soleH * 0.55, L * 0.95, soleY + soleH * 1.5);
+  c.quadraticCurveTo(L * 0.8, soleY + soleH * 1.35, soleTip - L * 0.02, soleY + soleH);
   c.closePath();
   c.fill();
-  // tread notches
-  c.strokeStyle = 'rgba(0,0,0,0.35)';
-  c.lineWidth = Math.max(1, L * 0.022);
-  for (let i = 0; i < 5; i++) {
-    const x = L * (0.08 + i * 0.17);
-    c.beginPath();
-    c.moveTo(x, soleY + L * 0.03);
-    c.lineTo(x, soleY + L * 0.12);
-    c.stroke();
-  }
+
+  // the dark gap between upper and peeled sole — the part that sells it
+  c.fillStyle = 'rgba(10,8,6,0.62)';
+  c.beginPath();
+  c.moveTo(soleTip - L * 0.02, soleY + soleH * 0.1);
+  c.quadraticCurveTo(L * 0.76, soleY + soleH * 0.3, L * 0.9, soleY + soleH * 0.95);
+  c.quadraticCurveTo(L * 0.74, soleY + soleH * 0.5, soleTip - L * 0.04, soleY + soleH * 0.55);
+  c.closePath();
+  c.fill();
+
+  // welt: one seam line along the sole, which is what a sole actually has
+  c.strokeStyle = 'rgba(255,240,210,0.13)';
+  c.lineWidth = Math.max(1, L * 0.018);
+  c.beginPath();
+  c.moveTo(-L * 0.4, soleY + soleH * 0.35);
+  c.lineTo(soleTip - L * 0.04, soleY + soleH * 0.35);
+  c.stroke();
 
   // --- upper: shaft leaning back, instep, rounded toe ---
   const g = c.createLinearGradient(0, -L * 0.95, 0, soleY);
@@ -1290,70 +1319,75 @@ const CREATURE_DRAW: Record<string, CreatureDrawFn> = {
   // would double it.
   weed(c, L, Hh, tail, col) {
     void col;
-    const FRONDS = 7;
-    const baseY = Hh * 1.2;
-    const rootW = L * 0.5;
+    // Bycatch seaweed: a tangle torn free and DRIFTING. It has no base, no
+    // ground and no up — so the fronds radiate from a loose central knot
+    // over a wide arc instead of growing upward from a clump. Two earlier
+    // passes both failed on exactly this: the first was five sticks with no
+    // common origin, the second grew a bush out of a solid dark root that
+    // read as soil.
+    //
+    // Its motion is a slow tumble, not a sway (see world/motion.ts) — a
+    // drifting tangle turns over, it does not bend from a fixed point.
+    const FRONDS = 9;
+    const reach = L * 1.15;
 
-    // root clump first, so the fronds grow out of it
-    c.fillStyle = '#24512f';
-    c.beginPath();
-    c.ellipse(0, baseY, rootW, Hh * 0.13, 0, 0, Math.PI * 2);
-    c.fill();
+    // A few crossing stems in the middle. Thin and mid-toned: this is what
+    // holds a tangle together, not a pedestal it stands on.
+    c.strokeStyle = 'rgba(42,94,54,0.9)';
+    c.lineWidth = Math.max(1.2, L * 0.05);
+    c.lineCap = 'round';
+    for (let i = 0; i < 3; i++) {
+      const a = (i / 3) * Math.PI;
+      c.beginPath();
+      c.moveTo(Math.cos(a) * -L * 0.3, Math.sin(a) * -Hh * 0.34);
+      c.quadraticCurveTo(0, 0, Math.cos(a) * L * 0.3, Math.sin(a) * Hh * 0.34);
+      c.stroke();
+    }
 
     for (let i = 0; i < FRONDS; i++) {
-      // deterministic fan: middle fronds tall and upright, outer ones
-      // shorter and leaning away
-      const t = i / (FRONDS - 1) - 0.5;   // -0.5 .. 0.5, fan across the clump
-      const lean = t * L * 1.05;
-      const height = (1 - Math.abs(t) * 0.62) * Hh * 2.3;
-      const bx = t * rootW * 0.75;
-      const tipX = bx + lean;
-      const tipY = baseY - height;
-      const midX = bx + lean * 0.35;
-      const midY = baseY - height * 0.55;
-      const wBase = L * 0.175 * (1 - Math.abs(t) * 0.3);
+      // Fan over 300 degrees, leaving a gap so the clump has a readable
+      // silhouette instead of being a rosette. Deterministic, so it bakes.
+      const a = -2.6 + (i / (FRONDS - 1)) * 5.2;
+      const len = reach * (0.62 + ((i * 7) % 5) * 0.095);
+      const tipX = Math.cos(a) * len;
+      const tipY = Math.sin(a) * len * (Hh / (L * 0.5)) * 0.5;
+      // curve each frond sideways so none of them is a straight spike
+      const curl = ((i % 2) ? 1 : -1) * 0.42;
+      const midX = tipX * 0.45 - Math.sin(a) * len * 0.3 * curl;
+      const midY = tipY * 0.45 + Math.cos(a) * len * 0.3 * curl;
+      const wBase = L * 0.14 * (0.8 + ((i * 3) % 4) * 0.08);
 
-      const g = c.createLinearGradient(bx, baseY, tipX, tipY);
-      g.addColorStop(0, '#1f4a2a');
-      g.addColorStop(0.45, i % 2 ? '#357a44' : '#2d6b3c');
-      g.addColorStop(1, i % 2 ? '#7fcf87' : '#68bd74');
+      const g = c.createLinearGradient(0, 0, tipX, tipY);
+      g.addColorStop(0, '#20492b');
+      g.addColorStop(0.4, i % 2 ? '#357a44' : '#2c6a3b');
+      g.addColorStop(1, i % 2 ? '#82d28a' : '#6bc077');
       c.fillStyle = g;
 
-      // the ribbon: up one side of the curve, back down the other, tapering
+      // tapering ribbon out from the centre and back
+      const nx = -Math.sin(a), ny = Math.cos(a);
       c.beginPath();
-      c.moveTo(bx - wBase, baseY);
-      c.quadraticCurveTo(midX - wBase * 0.55, midY, tipX, tipY);
-      c.quadraticCurveTo(midX + wBase * 0.55, midY, bx + wBase, baseY);
+      c.moveTo(nx * wBase, ny * wBase);
+      c.quadraticCurveTo(midX + nx * wBase * 0.5, midY + ny * wBase * 0.5, tipX, tipY);
+      c.quadraticCurveTo(midX - nx * wBase * 0.5, midY - ny * wBase * 0.5, -nx * wBase, -ny * wBase);
       c.closePath();
       c.fill();
 
-      // a lighter spine, so the ribbon does not read as a flat cutout
-      c.strokeStyle = 'rgba(190,240,190,0.16)';
-      c.lineWidth = Math.max(1, wBase * 0.3);
-      c.beginPath();
-      c.moveTo(bx, baseY);
-      c.quadraticCurveTo(midX, midY, tipX, tipY);
-      c.stroke();
-
-      // leaflets, alternating sides, ON the stem rather than beside it
-      c.fillStyle = i % 2 ? '#4e9c5b' : '#448a50';
-      for (let b = 1; b <= 3; b++) {
-        const u = b / 4;
-        // point on the quadratic at u
-        const px = (1 - u) * (1 - u) * bx + 2 * (1 - u) * u * midX + u * u * tipX;
-        const py = (1 - u) * (1 - u) * baseY + 2 * (1 - u) * u * midY + u * u * tipY;
+      // blade leaflets along the frond
+      c.fillStyle = i % 2 ? '#4e9c5b' : '#458b51';
+      for (let b = 1; b <= 2; b++) {
+        const u = b / 3;
+        const px = (1 - u) * (1 - u) * 0 + 2 * (1 - u) * u * midX + u * u * tipX;
+        const py = (1 - u) * (1 - u) * 0 + 2 * (1 - u) * u * midY + u * u * tipY;
         const side = b % 2 ? 1 : -1;
-        const lw = L * 0.19 * (1 - u * 0.4);
-        // Blades, not berries: long and thin, angled up along the frond. The
-        // first pass used near-circular ellipses and the clump read as
-        // lollipops on sticks.
+        const lw = L * 0.13 * (1 - u * 0.35);
         c.beginPath();
-        c.ellipse(px + side * lw * 0.55, py - Hh * 0.05, lw, Hh * 0.055 * (1 - u * 0.3),
-          side * 0.42 - 0.25, 0, Math.PI * 2);
+        c.ellipse(px + nx * side * lw * 0.5, py + ny * side * lw * 0.5,
+          lw, lw * 0.3, a + side * 0.5, 0, Math.PI * 2);
         c.fill();
       }
     }
-    void tail;   // the sway is the shader's job now — see the comment above
+    c.lineCap = 'butt';
+    void tail;   // the tumble is the scene's job, not the sprite's
   },
 
   // ===== Blobfish: droopy gelatinous body, hanging nose, frown. Body sags (`sin(tail*0.7)`), applied to the belly curve. =====

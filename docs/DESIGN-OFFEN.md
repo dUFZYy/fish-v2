@@ -17,6 +17,10 @@ ohne Leistungszahl die falsche Reihenfolge wäre.
 
 ## Von mir bei der Sichtprüfung gefunden
 
+- **Seetang ist zu spitz** (Dustin, 02.09.). Treibt jetzt richtig und hat
+  keinen Boden mehr, aber die Blätter laufen zu scharf zu und wirken wie
+  Dornen. Braucht runde, breite Klingen mit weichen Spitzen — Kelp, nicht
+  Agave.
 - **Beide Stiefel** waren ein brauner L-Klotz mit drei Strichen — die
   schwächste Grafik im Spiel, und Beifang landet groß auf der Fangkarte.
   (In Arbeit.)
