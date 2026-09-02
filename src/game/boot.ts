@@ -1,7 +1,7 @@
 import { Sprite } from 'pixi.js';
 import { engine } from '@/engine/app';
 import { Baker, baker, prnd } from '@/bake/baker';
-import { FishBatch, type FishInstance } from '@/world/fishBatch';
+import { Bend, FishBatch, type FishInstance } from '@/world/fishBatch';
 import { WaterOverlay, DEFAULT_FX, type WaterParams } from '@/world/water';
 import { standalone } from '@/bake/standalone';
 import { layout } from '@/engine/layout';
@@ -184,6 +184,7 @@ export async function startGame(): Promise<void> {
         veilR: waterParams.wBot[0], veilG: waterParams.wBot[1], veilB: waterParams.wBot[2],
         veil: 0,
         alpha: 1,
+        bend: Bend.Swim,
         fx: f.fx, fy: f.fy, fw: f.fw, fh: f.fh,
       },
       speed: 16 + prnd(i, 29) * 32,

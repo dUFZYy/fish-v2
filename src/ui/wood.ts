@@ -681,10 +681,21 @@ export function bakeBadge(color: '#e0483c' | '#3ad46a' | string = '#e0483c', dia
  * CSS `border-image`, so the same PNG serves any element size the DOM
  * layout produces. `fill` keeps the middle region visible (a background,
  * not just a border frame).
+ *
+ * The actual layout `border-width` is kept deliberately small (it only
+ * needs to be non-zero for `border-image` to render at all) while
+ * `border-image-width` stays at the full corner size — the CSS spec lets
+ * these differ, and when `border-image-width` is larger than `border-width`
+ * the image simply overlaps further into the padding/content area instead
+ * of being clipped there. That keeps the decorative corner/edge detail at
+ * full size WITHOUT eating a `sliceCss`-sized bite out of every small
+ * button's content box (a two-line HUD gear card at 44px tall has almost
+ * no room to spare — see hud.ts).
  */
 export function applyNineSlice(el: HTMLElement, tex: BakedNineSlice): void {
+  const layoutBorder = Math.min(4, tex.sliceCss);
   el.style.borderStyle = 'solid';
-  el.style.borderWidth = `${tex.sliceCss}px`;
+  el.style.borderWidth = `${layoutBorder}px`;
   el.style.borderImageSource = `url(${tex.url})`;
   el.style.borderImageSlice = `${tex.sliceSource} fill`;
   el.style.borderImageWidth = `${tex.sliceCss}px`;

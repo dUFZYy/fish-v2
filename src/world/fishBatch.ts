@@ -22,12 +22,36 @@
 
 import { Buffer, BufferUsage, Geometry, Mesh, Rectangle, Shader, type TextureSource } from 'pixi.js';
 
-/** vertical strips per fish; more = smoother bend. 8 is visually identical to continuous. */
-const SEGMENTS = 8;
+/**
+ * Grid resolution of the shared quad.
+ *
+ * COLS drives the fish tail wave (weighted along x); ROWS drives the
+ * anchored plant sway (weighted along y). With one row a swaying plant can
+ * only shear; four rows give it an actual bend, and 45 vertices per instance
+ * is nothing.
+ */
+const COLS = 8;
+const ROWS = 4;
 /** how many instances the buffers are sized for */
 const CAPACITY = 128;
-/** floats per instance in the dynamic buffer (17 used, padded to 20 for 16-byte alignment) */
+/** floats per instance in the dynamic buffer (18 used, padded to 20 for 16-byte alignment) */
 const STRIDE = 20;
+
+/**
+ * How a thing moves.
+ *
+ * The old game had one motion for everything in the water, which is why an
+ * old boot swam off with a tail wave. These are three different physical
+ * situations and they get three different deformations:
+ *
+ *   Swim   a travelling wave down the body, strongest at the tail. Fish,
+ *          creatures, anything alive that moves head-first.
+ *   Anchor rooted at the bottom, the tip sways sideways. Seaweed, plants.
+ *   Rigid  no deformation at all. A boot, a bottle, a chest. They drift and
+ *          turn as whole objects; the game rotates and bobs them, the shader
+ *          leaves their shape alone.
+ */
+export const enum Bend { Swim = 0, Anchor = 1, Rigid = 2 }
 
 export interface FishInstance {
   /** centre in logical px */
@@ -52,6 +76,8 @@ export interface FishInstance {
   veil: number;
   /** overall alpha */
   alpha: number;
+  /** how the shape deforms — see Bend */
+  bend: Bend;
   /** atlas frame in pixels */
   fx: number;
   fy: number;
@@ -71,6 +97,7 @@ in vec4 aMotion;       // flip, rot, phase, wobble
 in vec4 aVeil;         // veil rgb (0..1) and veil amount
 in vec4 aFrame;        // atlas frame x, y, w, h in texture pixels
 in float aAlpha;
+in float aBend;        // 0 = swim, 1 = anchored sway, 2 = rigid
 
 uniform vec2 uScreen;  // logical size
 uniform vec2 uAtlas;   // atlas texture size in pixels
@@ -85,16 +112,27 @@ void main() {
   float phase  = aMotion.z;
   float wobble = aMotion.w;
 
-  // Tail weight: 0 at the head, 1 at the tail tip, eased. The head of a fish
-  // barely moves while the tail sweeps — same shape as the old procedural
-  // path deformation in fish.js.
-  float tailT  = 0.5 - aLocal.x * flip;        // 0 at head side, 1 at tail side
-  float weight = tailT * tailT * (3.0 - 2.0 * tailT);
-
-  // Travelling wave along the body, not a rigid swing.
-  float bend = sin(phase - tailT * 2.2) * wobble * weight;
-
-  vec2 local = vec2(aLocal.x * aXYWH.z * flip, (aLocal.y + bend) * aXYWH.w);
+  vec2 local;
+  if (aBend < 0.5) {
+    // SWIM: a travelling wave down the body, weighted toward the tail. The
+    // head of a fish barely moves while the tail sweeps — the same shape as
+    // the old procedural path deformation in fish.js, but per-vertex.
+    float tailT  = 0.5 - aLocal.x * flip;      // 0 at the head, 1 at the tail
+    float weight = tailT * tailT * (3.0 - 2.0 * tailT);
+    float bend   = sin(phase - tailT * 2.2) * wobble * weight;
+    local = vec2(aLocal.x * aXYWH.z * flip, (aLocal.y + bend) * aXYWH.w);
+  } else if (aBend < 1.5) {
+    // ANCHOR: rooted at the bottom edge, the tip sways sideways. Weighted by
+    // height squared so the base does not move at all and the bend reads as
+    // a plant in a current rather than a rocking signpost.
+    float up     = clamp(0.5 - aLocal.y, 0.0, 1.0);
+    float weight = up * up;
+    float sway   = sin(phase - up * 1.2) * wobble * weight;
+    local = vec2((aLocal.x + sway) * aXYWH.z * flip, aLocal.y * aXYWH.w);
+  } else {
+    // RIGID: a boot is a boot. It drifts and turns as a whole object.
+    local = vec2(aLocal.x * aXYWH.z * flip, aLocal.y * aXYWH.w);
+  }
 
   float c = cos(rot), s = sin(rot);
   vec2 world = aXYWH.xy + vec2(local.x * c - local.y * s, local.x * s + local.y * c);
@@ -143,18 +181,25 @@ export class FishBatch {
   private count = 0;
 
   constructor(atlas: TextureSource, screenW: number, screenH: number) {
-    // --- shared quad, subdivided along x ---
-    const cols = SEGMENTS + 1;
-    const local = new Float32Array(cols * 2 * 2);
-    for (let i = 0; i < cols; i++) {
-      const u = i / SEGMENTS - 0.5;
-      local[i * 4 + 0] = u; local[i * 4 + 1] = -0.5;
-      local[i * 4 + 2] = u; local[i * 4 + 3] = 0.5;
+    // --- shared quad, subdivided in both axes ---
+    const nx = COLS + 1;
+    const ny = ROWS + 1;
+    const local = new Float32Array(nx * ny * 2);
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        const k = (j * nx + i) * 2;
+        local[k] = i / COLS - 0.5;
+        local[k + 1] = j / ROWS - 0.5;
+      }
     }
-    const indices = new Uint16Array(SEGMENTS * 6);
-    for (let i = 0; i < SEGMENTS; i++) {
-      const a = i * 2, b = a + 1, c = a + 2, d = a + 3;
-      indices.set([a, b, c, b, d, c], i * 6);
+    const indices = new Uint16Array(COLS * ROWS * 6);
+    let w = 0;
+    for (let j = 0; j < ROWS; j++) {
+      for (let i = 0; i < COLS; i++) {
+        const a = j * nx + i, b = a + 1, c = a + nx, d = c + 1;
+        indices[w++] = a; indices[w++] = b; indices[w++] = c;
+        indices[w++] = b; indices[w++] = d; indices[w++] = c;
+      }
     }
 
     this.instanceBuffer = new Buffer({
@@ -174,6 +219,7 @@ export class FishBatch {
         aVeil:   { buffer: this.instanceBuffer, format: 'float32x4', instance: true, offset: 32, stride: STRIDE * 4 },
         aFrame:  { buffer: this.instanceBuffer, format: 'float32x4', instance: true, offset: 48, stride: STRIDE * 4 },
         aAlpha:  { buffer: this.instanceBuffer, format: 'float32',   instance: true, offset: 64, stride: STRIDE * 4 },
+        aBend:   { buffer: this.instanceBuffer, format: 'float32',   instance: true, offset: 68, stride: STRIDE * 4 },
       },
     });
 
@@ -222,6 +268,7 @@ export class FishBatch {
     d[o + 8] = f.veilR; d[o + 9] = f.veilG; d[o + 10] = f.veilB; d[o + 11] = f.veil;
     d[o + 12] = f.fx; d[o + 13] = f.fy; d[o + 14] = f.fw; d[o + 15] = f.fh;
     d[o + 16] = f.alpha;
+    d[o + 17] = f.bend;
     this.count++;
   }
 

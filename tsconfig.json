@@ -9,11 +9,16 @@
     "noImplicitOverride": true,
     "skipLibCheck": true,
     "isolatedModules": true,
+    // The tests run under `node --experimental-strip-types`, which needs the
+    // real .ts specifier in the import. Safe here because tsc only ever
+    // type-checks this project; Vite does the emitting.
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
     "resolveJsonModule": true,
     "esModuleInterop": true,
     "useDefineForClassFields": true,
     "paths": { "@/*": ["./src/*"] },
-    "types": ["vite/client"]
+    "types": ["vite/client", "node"]
   },
   "include": ["src", "dev"]
 }

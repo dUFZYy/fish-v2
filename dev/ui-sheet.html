@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UI Sheet — A Silly Fishing Game</title>
+  <link rel="stylesheet" href="/src/ui/ui.css">
+  <style>
+    /* Dev-sheet-only chrome. The HUD/wood/icon styles themselves come from ui.css — this
+       page must look right using the SAME stylesheet the real game uses, not a copy. */
+    html, body { position: static; overflow: auto; height: auto; background: #2a2a2a; }
+    body { padding: 24px; color: #eee; font: 14px 'Segoe UI', system-ui, sans-serif; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    h2 { font-size: 15px; margin: 32px 0 10px; color: #ffd23a; border-bottom: 1px solid #444; padding-bottom: 4px; }
+    .sub { color: #aaa; margin: 0 0 16px; }
+    .row { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
+    .swatch { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+    .swatch small { color: #999; }
+    .icon-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 10px; max-width: 900px; }
+    .icon-cell { display: flex; flex-direction: column; align-items: center; gap: 4px; background: #1f1f1f; border-radius: 8px; padding: 8px 4px; }
+    .icon-cell img { width: 32px; height: 32px; }
+    .icon-cell span { font-size: 10px; color: #bbb; word-break: break-all; text-align: center; }
+    .panel-demo { position: relative; }
+    #lang-toggle { position: fixed; top: 16px; right: 16px; z-index: 100; }
+    #lang-toggle button { font: 700 13px sans-serif; padding: 8px 14px; border-radius: 6px; border: 1px solid #555; background: #333; color: #fff; cursor: pointer; }
+    #lang-toggle button.active { background: #d9a92b; color: #201400; border-color: #d9a92b; }
+    /* Stands in for the real `#ui` (which is `container-type: size` in ui.css)
+       so the HUD's `cqw`-based width formulas measure THIS box, not the dev
+       page's own (much wider) viewport. */
+    #hud-stage { position: relative; width: 390px; height: 844px; max-width: 100%; background: #1c4f6b; border: 2px solid #444; border-radius: 10px; overflow: hidden; isolation: isolate; container-type: size; }
+    #hud-stage::before {
+      content: '390×844 reference frame — fishing-spot scene stand-in';
+      position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+      color: rgba(255,255,255,0.25); font-size: 13px; text-align: center; padding: 20px;
+    }
+    #hud-mount { position: absolute; inset: 0; }
+  </style>
+</head>
+<body>
+  <div id="lang-toggle">
+    <button data-lang="de" class="active">DE</button>
+    <button data-lang="en">EN</button>
+  </div>
+
+  <h1>UI Sheet</h1>
+  <p class="sub">Every wood panel variant, button state, all 38 icons, and the full fishing-place HUD with sample data — for eyeballing without booting the game. Uses the real <code>src/ui/ui.css</code>.</p>
+
+  <div id="app"></div>
+
+  <script type="module" src="/dev/uiSheet.ts"></script>
+</body>
+</html>

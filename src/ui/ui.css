@@ -44,5 +44,174 @@ html, body {
   inset: 0;
   pointer-events: none;
   z-index: 10;
+  /* Container query context: HUD layout math (hud-status's width formula
+     below) is expressed in `cqw`/`cqh`, not `vw`/`vh`, so it is scoped to
+     whatever box `#ui` actually occupies rather than the true document
+     viewport. In the shipped game those are the same box (#ui fills the
+     screen); in the dev sheet's bounded 390×844 preview frame they are
+     not, and only `cqw` gives a correct preview there too. */
+  container-type: size;
+  container-name: ui;
 }
 #ui > * { pointer-events: auto; }
+
+/* ==========================================================================
+   Wood buttons & badges (src/ui/dom.ts, src/ui/wood.ts)
+   Nine-slice `border-image` dresses these — see wood.ts's file comment for
+   why a data-URL + border-image was chosen over a per-panel <canvas>.
+   ========================================================================== */
+
+.wood-btn {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #f5ecd8;
+  font: 700 13px/1.1 'Baloo 2', 'Segoe UI', system-ui, sans-serif;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+  transition: transform 90ms ease-out, filter 90ms ease-out;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+.wood-btn:disabled { cursor: default; filter: grayscale(0.4) brightness(0.7); }
+.wood-btn.is-pressed { transform: translateY(1px) scale(0.97); filter: brightness(0.85); }
+.wood-btn-icon { width: 20px; height: 20px; display: block; pointer-events: none; }
+.wood-btn-label { pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.badge {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+  color: #fff;
+  font: 700 10px/1 'Baloo 2', 'Segoe UI', system-ui, sans-serif;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+
+/* ==========================================================================
+   Fishing-place HUD (src/ui/hud.ts) — positions from spec 05-ui-hub-story.md
+   §1.1/§1.2, against the 390×844 reference frame. `--sat/--sab` etc. come
+   from the env(safe-area-inset-*) probe already defined above.
+   ========================================================================== */
+
+/* `position: absolute`, not `fixed`: the HUD only needs to fill whatever
+   positioned container it's mounted into (`#ui`, which is already
+   `position: fixed; inset: 0` covering the viewport in the real game) —
+   this also lets a dev/test harness confine the HUD to a bounded preview
+   frame instead of it always escaping to the real viewport. */
+.hud { position: absolute; inset: 0; pointer-events: none; }
+.hud > * { pointer-events: auto; }
+
+.hud-status {
+  position: absolute;
+  left: 16px;
+  top: calc(var(--sat) + 16px);
+  width: min(250px, calc(100cqw - 32px - 122px - 10px));
+  height: 64px;
+  padding: 0 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  box-sizing: border-box;
+  color: #fff;
+  font: 700 13px 'Baloo 2', 'Segoe UI', system-ui, sans-serif;
+}
+
+.hud-status-row1 { display: flex; align-items: center; gap: 4px; height: 20px; }
+.hud-coin-icon { width: 20px; height: 20px; }
+.hud-coins { color: #ffd700; font: 700 19px 'Baloo 2', 'Segoe UI', system-ui, sans-serif; margin-right: 6px; }
+.hud-gem-icon { width: 16px; height: 16px; }
+.hud-gems { color: #9fe3ff; font: 700 16px 'Baloo 2', 'Segoe UI', system-ui, sans-serif; }
+.hud-clock { margin-left: auto; display: flex; align-items: center; gap: 3px; color: rgba(255, 255, 255, 0.9); font: 700 13px 'Baloo 2', 'Segoe UI', system-ui, sans-serif; }
+.hud-clock-icon { width: 14px; height: 14px; }
+
+.hud-divider {
+  height: 2px;
+  margin: 5px 0;
+  background:
+    linear-gradient(rgba(20, 10, 4, 0.5), rgba(20, 10, 4, 0.5)) top / 100% 1px no-repeat,
+    linear-gradient(rgba(255, 225, 180, 0.09), rgba(255, 225, 180, 0.09)) bottom / 100% 1px no-repeat;
+}
+
+.hud-status-row2 { display: flex; align-items: center; gap: 6px; height: 20px; }
+.hud-level-chip {
+  width: 20px; height: 20px; border-radius: 50%; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(circle at 35% 30%, #a9e0ff, #4aa3ff);
+  color: #0c2438; font: 800 11px 'Baloo 2', 'Segoe UI', system-ui, sans-serif;
+}
+.hud-title { color: rgba(255, 255, 255, 0.92); font: 700 12px 'Baloo 2', 'Segoe UI', system-ui, sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hud-xp-text { margin-left: auto; color: rgba(255, 255, 255, 0.5); font: 400 10px 'Baloo 2', 'Segoe UI', system-ui, sans-serif; white-space: nowrap; }
+
+.hud-xp-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(0, 0, 0, 0.35); border-radius: 0 0 12px 12px; overflow: hidden; }
+.hud-xp-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #8fd3ff, #4aa3ff); transition: width 200ms ease-out; }
+
+.hud-skill-badge { position: absolute; top: -6px; right: -6px; }
+
+.hud-gear-col {
+  position: absolute;
+  top: calc(var(--sat) + 16px);
+  right: 16px;
+  width: 122px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.hud-menu-btn, .hud-gear-btn { width: 122px; height: 44px; position: relative; }
+.hud-menu-btn.has-marker::after {
+  content: '';
+  position: absolute; top: -3px; right: -3px; width: 10px; height: 10px; border-radius: 50%;
+  background: #e0483c; border: 1.5px solid rgba(12, 22, 34, 0.55);
+}
+.hud-gear-btn { flex-direction: column; gap: 1px; }
+.hud-gear-btn.is-single-line { justify-content: center; }
+.hud-gear-line { font: 700 11px 'Baloo 2', 'Segoe UI', system-ui, sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100px; }
+.hud-gear-line.has-upgrade-arrow::after { content: ' \2B06'; color: #ffd23a; }
+
+.hud-bottombar {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: calc(var(--sab) + 12px);
+  height: 44px;
+  display: flex;
+  gap: 8px;
+}
+.hud-bar-btn { flex: 1 1 0; height: 44px; position: relative; }
+.hud-bar-badge-slot { position: absolute; top: -5px; right: 6px; }
+
+.hud-toasts {
+  position: absolute;
+  left: 50%;
+  top: 40%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  pointer-events: none;
+}
+.hud-toast {
+  font: 700 20px 'Baloo 2', 'Segoe UI', system-ui, sans-serif;
+  text-shadow: 0 0 5px #000, 0 0 5px #000, 0 1px 2px #000;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity 200ms ease-out, transform 1.4s ease-out;
+  white-space: nowrap;
+}
+.hud-toast.is-live { opacity: 1; transform: translateY(-46px); transition: opacity 1.2s ease-in 0.2s, transform 1.4s ease-out; }

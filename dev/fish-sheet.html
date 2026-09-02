@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Fisch-Kontaktbogen</title>
+  <style>
+    body { margin: 0; padding: 16px; background: #16232b; color: #e8f2f6;
+           font: 14px/1.5 system-ui, sans-serif; }
+    h1 { font-size: 18px; margin: 0 0 4px; }
+    p.hint { color: #8fb0bd; margin: 0 0 16px; }
+    label { display: inline-flex; align-items: center; gap: 6px; margin: 0 16px 12px 0; }
+    input[type=range] { width: 140px; }
+    #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; }
+    .cell { background: #1c2c35; border-radius: 6px; padding: 6px; text-align: center; }
+    .cell canvas { display: block; margin: 0 auto 4px; background: #0e1a20;
+                   image-rendering: pixelated; }
+    .cell .name { font-size: 10px; color: #8fb0bd; line-height: 1.3; word-break: break-word; }
+    .cell.err { outline: 2px solid #d9534f; }
+    #state { margin: 14px 0; padding: 10px; background: #1c2c35; border-radius: 8px;
+              font: 12px/1.5 ui-monospace, monospace; color: #a8c6d2; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Fisch-Kontaktbogen</h1>
+  <p class="hint">Alle Arten aus <code>src/data/species.ts</code>, gebacken mit <code>drawSpecies</code> aus
+    <code>src/bake/fishArt.ts</code>. Reines Entwicklungswerkzeug, kein Teil des Spiels.</p>
+  <label><span>Licht (Tag↔Nacht)</span><input type="range" id="light" min="0" max="100" value="100"><output id="lightOut">1.00</output></label>
+  <label><input type="checkbox" id="shiny"> Shiny</label>
+  <div id="state"></div>
+  <div id="grid"></div>
+  <script type="module" src="/dev/fishSheet.ts"></script>
+</body>
+</html>
