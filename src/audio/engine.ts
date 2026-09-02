@@ -60,15 +60,29 @@ export class AudioEngine {
   private volumes: Record<BusName | 'master', number> = { master: 0.9, sfx: 1, ui: 0.7, amb: 0.6, music: 0.5 };
   muted = false;
   private unlocked = false;
+  /** true while rendering into an OfflineAudioContext for measurement */
+  private offline = false;
 
-  /** True once the context exists and is running. */
-  get ready(): boolean { return !!this.ctx && this.ctx.state === 'running'; }
+  /**
+   * True once the context exists and can accept scheduled sound.
+   *
+   * An OfflineAudioContext reports 'suspended' until rendering starts, so a
+   * plain state check makes every sound silent under measurement — which is
+   * exactly the trap the old project's notes warn about: when a measurement
+   * gives an absurd result, check the instrument before the code.
+   */
+  get ready(): boolean { return !!this.ctx && (this.offline || this.ctx.state === 'running'); }
 
   /**
    * Builds the graph. Safe to call repeatedly. Must be called from a user
    * gesture on iOS, otherwise the context stays suspended.
    */
-  init(): void {
+  init(injected?: BaseAudioContext): void {
+    // An injected context is how the sounds get MEASURED: rendering the same
+    // graph into an OfflineAudioContext turns "it did not throw" into peak and
+    // RMS numbers. The old project shipped a silent sound because a NaN made
+    // it inaudible and nobody looked at the samples.
+    if (injected) { this.adopt(injected); return; }
     if (!this.ctx) {
       const Ctor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       if (!Ctor) return;
@@ -83,6 +97,19 @@ export class AudioEngine {
       this.build();
     }
     if (this.ctx.state === 'suspended') void this.ctx.resume();
+  }
+
+  /**
+   * Rebuilds the whole graph on a different context. Used to render the real
+   * sounds into an OfflineAudioContext so they can be measured rather than
+   * assumed, and to hand the engine back to a live context afterwards.
+   */
+  adopt(ctx: BaseAudioContext): void {
+    this.ctx = ctx as AudioContext;
+    this.offline = typeof OfflineAudioContext !== 'undefined' && ctx instanceof OfflineAudioContext;
+    this.buses.clear();
+    this.voices = 0;
+    this.build();
   }
 
   private build(): void {
@@ -248,7 +275,11 @@ export class AudioEngine {
     if (this.muted || !this.ready) return false;
     if (this.voices >= MAX_VOICES) return false;
     this.voices++;
-    window.setTimeout(() => { this.voices--; }, Math.min(6000, (seconds + 0.3) * 1000));
+    // Offline rendering has no wall clock, so the timer would never fire and
+    // the cap would lock after 24 sounds. Nothing to release there anyway.
+    if (!this.offline) {
+      window.setTimeout(() => { this.voices--; }, Math.min(6000, (seconds + 0.3) * 1000));
+    }
     return true;
   }
 

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Klangprüfbrett</title>
+  <style>
+    body { margin: 0; padding: 16px; background: #16232b; color: #e8f2f6;
+           font: 14px/1.5 system-ui, sans-serif; }
+    h1 { font-size: 18px; margin: 0 0 4px; }
+    p.hint { color: #8fb0bd; margin: 0 0 16px; }
+    h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
+         color: #8fb0bd; margin: 22px 0 8px; border-bottom: 1px solid #2b3d47; padding-bottom: 4px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+    button { padding: 12px 10px; border: 1px solid #35505d; border-radius: 8px;
+             background: #23353f; color: #e8f2f6; font: inherit; cursor: pointer; }
+    button:active { background: #2f4855; transform: translateY(1px); }
+    label { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+    label span { width: 130px; color: #8fb0bd; }
+    input[type=range] { flex: 1; }
+    output { width: 44px; text-align: right; font-variant-numeric: tabular-nums; }
+    #state { margin-top: 18px; padding: 10px; background: #1c2c35; border-radius: 8px;
+             font: 12px/1.5 ui-monospace, monospace; color: #a8c6d2; white-space: pre; }
+  </style>
+</head>
+<body>
+  <h1>Klangprüfbrett</h1>
+  <p class="hint">Einmal irgendwo tippen, damit iOS/Chrome den Ton freigibt. Dann die Knöpfe.</p>
+  <div id="board"></div>
+  <div id="state"></div>
+  <script type="module" src="/dev/audioBoard.ts"></script>
+</body>
+</html>
