@@ -29,6 +29,9 @@ import type { Scene } from './scene';
 /** on-screen length in logical px for a species of `len` 1 at scale 1 */
 const BASE_LEN = 46;
 
+/** seconds a fish takes to come about */
+const TURN_TIME = 0.42;
+
 export interface Fish {
   sp: Species;
   motion: MotionProfile;
@@ -55,6 +58,20 @@ export interface Fish {
   fade: number;
   /** far background fish are silhouettes and not interactive (2.5D) */
   distant: boolean;
+  /**
+   * Turn animation, 0 = not turning, otherwise 0..1 through the turn.
+   *
+   * The old game squashed a fish horizontally as it came about — the sprite
+   * narrows to almost nothing at the halfway point and opens out facing the
+   * other way. It reads as the fish rotating through the third dimension,
+   * and it is the single cheapest thing that makes a 2D shoal feel like it
+   * is in water rather than on a conveyor belt. The port had dropped it.
+   */
+  turn: number;
+  /** which way it will face once the turn completes */
+  turnTo: number;
+  /** seconds until this fish considers changing its mind */
+  nextDecision: number;
   /** atlas frame */
   fx: number;
   fy: number;
@@ -78,6 +95,8 @@ interface LimbInstance {
   inst: FishInstance;
   /** own phase offset, so the fin is not locked to the tail */
   phase: number;
+  /** unsquashed width, so a turn can scale it without drift */
+  baseW: number;
 }
 
 export interface ShoalOptions {
@@ -151,6 +170,7 @@ export class Shoal {
     return {
       spec,
       phase,
+      baseW: w,
       inst: {
         x: 0, y: 0, w, h,
         flip: 1, rot: 0, phase: 0, wobble: 0,
@@ -212,6 +232,9 @@ export class Shoal {
       shiny,
       fade: 0,
       distant,
+      turn: 0,
+      turnTo: dir,
+      nextDecision: 2 + this.rng() * 6,
       fx: fr.fx, fy: fr.fy, fw: fr.fw, fh: fr.fh,
       inst: {
         x: 0, y: 0, w: fr.w, h: fr.h,
@@ -264,7 +287,38 @@ export class Shoal {
         if (f.distant !== pass) continue;
         const m = f.motion;
 
-        f.x += f.speed * f.dir * dt;
+        // --- turning ------------------------------------------------------
+        // A fish that only ever crosses the screen and wraps around reads as
+        // a conveyor belt. So it changes its mind now and then, and the turn
+        // itself is animated: the sprite squashes to a sliver and opens out
+        // the other way, which is how the old game did it.
+        let squash = 1;
+        if (f.turn > 0) {
+          f.turn += dt / TURN_TIME;
+          if (f.turn >= 1) { f.turn = 0; f.dir = f.turnTo; }
+          else {
+            // halfway through the squash, the fish is edge-on and flips
+            if (f.turn >= 0.5 && f.dir !== f.turnTo) f.dir = f.turnTo;
+            squash = Math.max(0.06, Math.abs(Math.cos(f.turn * Math.PI)));
+          }
+        } else if (!f.distant) {
+          f.nextDecision -= dt;
+          const nearEdge = f.x < 40 || f.x > layout.W - 40;
+          if (f.nextDecision <= 0 || nearEdge) {
+            f.nextDecision = 3 + this.rng() * 7;
+            // near an edge it always turns back; otherwise sometimes
+            if (nearEdge || this.rng() < 0.45) {
+              f.turn = 0.0001;
+              f.turnTo = nearEdge ? (f.x < 40 ? 1 : -1) : -f.dir;
+            }
+            // and it may pick a new depth inside its species' band
+            const d0 = f.sp.depth[0], d1 = f.sp.depth[1];
+            f.band = d0 + this.rng() * Math.max(0.02, d1 - d0);
+          }
+        }
+
+        // A turning fish barely makes headway, which is also true of fish.
+        f.x += f.speed * f.dir * dt * (f.turn > 0 ? 0.25 : 1);
         f.y += m.driftY * dt;
 
         // keep to the depth band, drifting gently back toward it
@@ -276,7 +330,7 @@ export class Shoal {
         const inst = f.inst;
         inst.x = f.x;
         inst.y = f.y + Math.sin(t * m.bobRate * 6.28 + f.bobPhase) * m.bobAmp;
-        inst.w = f.w;
+        inst.w = f.w * squash;
         inst.h = f.h;
         inst.flip = m.facesTravel ? f.dir : 1;
         inst.rot = m.rollAmp
@@ -325,12 +379,17 @@ export class Shoal {
   private pushLimb(f: Fish, limb: LimbInstance, body: FishInstance, rot: number): void {
     const li = limb.inst;
     const s = limb.spec;
+    // body.w is already squashed during a turn, so the anchor rides in with
+    // it and the fin stays attached instead of sliding off the peduncle.
     const ax = s.anchorX * body.w * body.flip;
     const ay = s.anchorY * body.h;
     const c = Math.cos(body.rot), sn = Math.sin(body.rot);
     li.x = body.x + ax * c - ay * sn;
     li.y = body.y + ax * sn + ay * c;
     li.flip = body.flip;
+    // The limb narrows with the body; keeping it at full width during a turn
+    // would leave a full-size tail on a sliver of fish.
+    li.w = limb.baseW * (body.w / f.w);
     // A fin on a mirrored fish must swing the other way, or it hinges
     // backwards.
     li.rot = body.rot + rot * body.flip;
