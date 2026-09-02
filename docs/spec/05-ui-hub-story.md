@@ -94,6 +94,31 @@ Leaderboard, Pass, Talents, Settings, Decorate) share one presentation system:
   — they compute their row count from available height instead of a fixed content size).
   Minimum sheet height anywhere: **240px**.
 
+- **Per-screen theme** (`OVERLAY_THEME`, accent color + header icon):
+
+| id | accent | icon |
+|---|---|---|
+| shop | `#ff8c00` | tacklebox |
+| dex | `#4aa3ff` | book |
+| map | `#5ad46a` | map |
+| daily | `#3fc7a8` | calendar |
+| quests | `#c072ff` | clipboard |
+| achievements | `#8b7cf6` | trophy |
+| leaderboard | `#4fc3f7` | chart |
+| pass | `#ff5c8a` | ticket |
+| talents | `#8fd3ff` | star |
+| inventar | `#9b6bff` | orb |
+| aquarium | `#3fc7a8` | tank |
+| decor | `#3fc7a8` | coral |
+| settings | `#d8b25a` | gear |
+
+- **Tab groups sharing one bottom-grip rail** (`OVERLAY_GROUPS`): **"Belohnungen"**
+  (Rewards) — accent `#3fc7a8`, icon `gift` — tabs `daily`("Bonus"), `quests`("Aufträge"),
+  `pass`("Pass"); **"Angler"** — accent `#8fd3ff`, icon `rod` — tabs `talents`("Talente"),
+  `achievements`("Erfolge"), `leaderboard`("Bestenliste"). `settings`, `diag`, `map`,
+  `inventar` (own bespoke frame, §1.5), `decor`, `shop`, `dex` are standalone (no shared
+  group — the latter two keep top-of-content tabs per the list-filtering exception above).
+
 ### 1.1 HUD (drawn over the fishing-spot scene, not an overlay)
 
 Canvas sizing note: `canvas.width/height` are the live viewport in px; `isNarrow() =
@@ -1944,6 +1969,56 @@ patched `fillText`/`strokeText`/`measureText`), `fontMidNudge` (§5), `UI_FONT`.
 `overlaySheetH`, `overlayAnim`, `overlayClosing`, `uiButton(...)`, `drawTabs(...)`,
 `pressApply(key,x,y,w,h)`, `pressGlow(k,x,y,w,h,r)`, `tapEcho(x,y)`, `drawTapEchoes()`,
 `badgeMarks()`, `hitButtons` (§9.2).
+
+**`draw.js` function index** (line numbers from the source file, for cross-reference when
+porting): `hexToRgb`16, `lerpColor`22, `getPalette`26, `drawBackground`79, `drawStars`101,
+`drawSun`123, `drawMoon`162, `drawClouds`187, `drawBirds`220, `drawWater`240,
+`drawDockLegs`288, `drawDock`303, `drawAngler`329, `drawRod`558, `drawLine`697,
+`drawBobber`720, `drawHat`798, `drawHook`935, `drawAimHelper`980, `drawBiteAlert`1007,
+`drawReelMinigame`1028, `drawCatchCard`1093, `hudTop`1193, `drawCoinIcon`1199,
+`drawCoinDisplay`1233, `affordableIn`1323, `drawGearChips`1367, `hudRightRow`1438,
+`drawHarpoonChipIcon`1454, `bottomBarY`1465, `barTrack`1475, `pressWave/pressKey/
+pressApply/pressGlow`1505-1533, `tapEcho/updateTapEchoes/drawTapEchoes`1539-1558,
+`uiButton`1560, `drawMark`1625, `badgeMarks`1643, `drawBadge/drawBadgeText`1657-1658,
+`seenState/flushSeen/unseenSpecies/isNewItem/unseenItems/badgeCounts/markSeen`1672-1706,
+`drawTopButtons`1730, `fitText`1755, `wrapText`1768, `drawCastButton`1788, `drawHint`1803,
+overlay geometry/animation cluster 1849-2065 (`OVERLAY_THEME`1817, `OVERLAY_GROUPS`1841,
+`overlayGroupOf`, `overlayContentNeed`1865, `overlayMaxH`, `overlayTopOffset`,
+`overlayHasRail`, `overlayRailH`, `overlayFootH`, `overlayTargetH`, `overlayRect`1959,
+`overlayRevealStep`, `overlayRiseOffset`, `overlayRevealClip`, `overlayRevealEdge`,
+`overlayLeadingEdge`), `drawOverlayFrame`2067, `overlayTabBadge`2176, `drawAnglerStrip`2187,
+`drawTabs`2222, `drawShop`2231, `drawGachaShop`2324, `drawRodPreview`2354,
+`drawItemPreview`2413, `drawDex`2467, `drawDexDetail`2523, `drawNightTint`2565.
+
+**`inventory.js` function index**: `invBag/invCount/invTotal/invAdd/invTake/invList`25-67,
+`totemTimes/totemRemaining/runningTotems/totemFraction`76-83, `totemTick`89,
+`drawTotemRing`111, `totemTimeLabel`131, `caseBrass`172, `caseWell`182, `caseButton`198,
+`drawCaseClutter`237, `drawCaseBait/Hook/Spool`273-308, `drawCaseFrame`313,
+`invFanStep`433, `invRowH/invContentNeed`438-442, `invTotemRows`447, `drawInventory`456.
+
+**Other overlay bodies** (draw *into* the shared chrome from §1.0/§10.6 but are
+implemented in their own files, confirmed via `drawOverlayFrame(...)` call sites — not
+read in full for this doc beyond what's summarized in §1.6–1.9): `settings`→
+`progress.js:234`, `diag`→`progress.js:389`, `daily`→`progress.js:154`, `quests`→
+`quests.js:75`, `talents`→`talents.js:23`, `achievements`→`events.js:306`,
+`leaderboard`→`online.js:49`, `pass`→`pass.js:149`, `map`→`locations.js:554`,
+`decor`→`aquarium.js:1370`.
+
+### 10.10 Rarity / currency / color-coding reference (all files)
+
+- **Fish rarity** (`fish.js`, `RARITY` table — drives Dex tinting, Shop item borders,
+  Catch-card name/glow color): `common #c3ccd6` (spawn weight 50), `uncommon #5ad46a`
+  (24), `rare #4aa3ff` (10), `epic #c072ff` (3.5), `legendary #ffc83d` (1).
+- **Coins**: hand-drawn icon (§1.1), display text `#ffd700`.
+- **Gems**: `drawGemIcon` (icons.js `gem`), display text `#9fe3ff`.
+- **Markers**: ready/claimable green `#3ad46a`/`#5ad46a`; new/unseen red `#ff4a4a`/`#ff3b30`.
+- **Overlay accent colors**: see the `OVERLAY_THEME` table in §1 (per-screen), reused for
+  that screen's accent borders, active-tab fill, and marker tinting.
+- **Reel-minigame states**: safe/holding `#5ad46a`; warning `#ffb347`/`#ff8c00`;
+  danger/burst `#ff5c5c`/`#ff4040`/`#ff3b30`.
+- **Level chip**: gradient `#a9e0ff→#4aa3ff`.
+- **Wood paint buckets**: see §2.2 (`Wood.PAINT`) — the 6-color system every other UI
+  color ultimately snaps to when painted onto a wood surface.
 
 ### 10.7 Hub/aquarium (§7)
 All functions/state listed in §7.18.
