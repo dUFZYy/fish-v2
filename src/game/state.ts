@@ -31,7 +31,9 @@
  * original's literal state values.
  */
 
-import type { ReelState } from './drill';
+// TODO(E1): drill.ts is not ported yet. The structural type it will export is
+// declared here so the state machine already compiles against the final shape.
+import type { ReelState } from './drillTypes';
 import type { HarpoonState, HarpoonCharge } from './cast';
 
 // ---------------------------------------------------------------------------
