@@ -9,10 +9,5 @@ export default defineConfig({
     target: 'es2020',
     sourcemap: false,
     assetsInlineLimit: 0,
-    rollupOptions: {
-      output: {
-        manualChunks: { pixi: ['pixi.js'] },
-      },
-    },
   },
 });
