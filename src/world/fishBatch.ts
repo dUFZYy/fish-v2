@@ -33,8 +33,8 @@ import { Buffer, BufferUsage, Geometry, Mesh, Rectangle, Shader, type TextureSou
 const COLS = 8;
 const ROWS = 4;
 /** how many instances the buffers are sized for */
-const CAPACITY = 128;
-/** floats per instance in the dynamic buffer (18 used, padded to 20 for 16-byte alignment) */
+const CAPACITY = 640;   // body + tail + fin per creature, plus props
+/** floats per instance in the dynamic buffer (20 used exactly) */
 const STRIDE = 20;
 
 /**
@@ -78,6 +78,18 @@ export interface FishInstance {
   alpha: number;
   /** how the shape deforms — see Bend */
   bend: Bend;
+  /**
+   * Rotation pivot in local units, -0.5..0.5 across the sprite.
+   *
+   * (0,0) rotates about the centre, which is what a whole fish wants. A fin
+   * wants to rotate about its ROOT, so it is pushed as its own instance with
+   * the pivot at the edge where it joins the body. That is what lets the
+   * caudal fin sweep and the pectoral fin scull independently, instead of
+   * the whole fish bending — which is what the first version did, and it
+   * looked like the fish was wobbling rather than swimming.
+   */
+  pivotX: number;
+  pivotY: number;
   /** atlas frame in pixels */
   fx: number;
   fy: number;
@@ -98,13 +110,26 @@ in vec4 aVeil;         // veil rgb (0..1) and veil amount
 in vec4 aFrame;        // atlas frame x, y, w, h in texture pixels
 in float aAlpha;
 in float aBend;        // 0 = swim, 1 = anchored sway, 2 = rigid
+in vec2 aPivot;        // rotation pivot in local units (-0.5..0.5)
 
 uniform vec2 uScreen;  // logical size
 uniform vec2 uAtlas;   // atlas texture size in pixels
+// The water, so a fish is distorted BY the surface rather than wobbling on
+// its own. Same numbers the water pass uses, so the two agree.
+uniform float uTime;
+uniform float uHorizon;
+uniform vec4  uWaveA;    // amplitude, 1/length, speed, unused
+uniform vec4  uWaveB;
+uniform float uRefract;  // 0 = off
 
 out vec2 vUV;
 out vec4 vVeil;
 out float vAlpha;
+
+float waveY(float x) {
+  return uHorizon + sin(x * uWaveA.y + uTime * uWaveA.z) * uWaveA.x
+                  + sin(x * uWaveB.y + uTime * uWaveB.z) * uWaveB.x;
+}
 
 void main() {
   float flip   = aMotion.x;
@@ -114,12 +139,20 @@ void main() {
 
   vec2 local;
   if (aBend < 0.5) {
-    // SWIM: a travelling wave down the body, weighted toward the tail. The
-    // head of a fish barely moves while the tail sweeps — the same shape as
-    // the old procedural path deformation in fish.js, but per-vertex.
+    // SWIM: only the TAIL sweeps.
+    //
+    // The first version weighted the bend with a smoothstep that still moved
+    // the middle of the body, and with the ambient bob on top the whole fish
+    // read as bobbing up and down — Dustin's exact complaint, and he was
+    // right. In the old game the tail FIN moved and the rest of the fish was
+    // displaced by the water, not by itself.
+    //
+    // So the weight is now zero over the front two thirds and rises steeply
+    // only across the rear third, which is where a caudal fin actually is.
     float tailT  = 0.5 - aLocal.x * flip;      // 0 at the head, 1 at the tail
-    float weight = tailT * tailT * (3.0 - 2.0 * tailT);
-    float bend   = sin(phase - tailT * 2.2) * wobble * weight;
+    float weight = smoothstep(0.62, 1.0, tailT);
+    weight *= weight;
+    float bend   = sin(phase - tailT * 1.6) * wobble * weight;
     local = vec2(aLocal.x * aXYWH.z * flip, (aLocal.y + bend) * aXYWH.w);
   } else if (aBend < 1.5) {
     // ANCHOR: rooted at the bottom edge, the tip sways sideways. Weighted by
@@ -134,8 +167,38 @@ void main() {
     local = vec2(aLocal.x * aXYWH.z * flip, aLocal.y * aXYWH.w);
   }
 
+  // Rotate about the pivot rather than the centre, so a fin swings from its
+  // root. The pivot is in local units, so it flips with the sprite.
+  vec2 piv = vec2(aPivot.x * aXYWH.z * flip, aPivot.y * aXYWH.w);
+  vec2 rel = local - piv;
   float c = cos(rot), s = sin(rot);
-  vec2 world = aXYWH.xy + vec2(local.x * c - local.y * s, local.x * s + local.y * c);
+  vec2 world = aXYWH.xy + piv + vec2(rel.x * c - rel.y * s, rel.x * s + rel.y * c);
+
+  // ---- seen THROUGH water --------------------------------------------------
+  // The old game got its liveliness from a full-screen shader that sampled
+  // the whole scene at an offset derived from the surface: things just under
+  // the water rose and fell with the wave above them, and the effect died off
+  // with depth. That is what made it read as looking INTO water.
+  //
+  // Recreating it by sampling the scene would mean a render target and a
+  // second full-screen pass. It does not have to be: the same displacement,
+  // applied per vertex to the sprite, gives the same motion — and because the
+  // quad is a 8x4 grid it is a real distortion across the body, not a shift.
+  // Identical formula and identical wave numbers as the water pass, so the
+  // fish and the bands move together.
+  if (uRefract > 0.001 && world.y > uHorizon) {
+    float d  = clamp((world.y - uHorizon) / max(uScreen.y - uHorizon, 1.0), 0.0, 1.0);
+    float wy = waveY(world.x);
+    // surface slope: what is under a steep part of the wave is pushed aside
+    float slope = (waveY(world.x + 2.0) - waveY(world.x - 2.0)) * 0.25;
+    // slow body-of-water sway, growing with depth
+    float sway  = sin(world.y * 0.045 - uTime * 1.1 + sin(world.x * 0.012)) * (0.5 + d);
+    // and the lift that ties shallow things to the wave crest above them
+    float lift  = (uHorizon - wy) * exp(-d * 3.0) * 0.75;
+    vec2 off = vec2(slope * 14.0 * exp(-d * 2.1) + sway * 0.9,
+                    lift + cos(world.x * 0.02 + uTime * 0.8) * 0.6);
+    world -= off * uRefract;
+  }
 
   // logical px -> clip space (y down)
   vec2 clip = vec2(world.x / uScreen.x * 2.0 - 1.0, 1.0 - world.y / uScreen.y * 2.0);
@@ -220,6 +283,7 @@ export class FishBatch {
         aFrame:  { buffer: this.instanceBuffer, format: 'float32x4', instance: true, offset: 48, stride: STRIDE * 4 },
         aAlpha:  { buffer: this.instanceBuffer, format: 'float32',   instance: true, offset: 64, stride: STRIDE * 4 },
         aBend:   { buffer: this.instanceBuffer, format: 'float32',   instance: true, offset: 68, stride: STRIDE * 4 },
+        aPivot:  { buffer: this.instanceBuffer, format: 'float32x2', instance: true, offset: 72, stride: STRIDE * 4 },
       },
     });
 
@@ -230,6 +294,11 @@ export class FishBatch {
         fishUniforms: {
           uScreen: { value: new Float32Array([screenW, screenH]), type: 'vec2<f32>' },
           uAtlas: { value: new Float32Array([atlas.width, atlas.height]), type: 'vec2<f32>' },
+          uTime: { value: 0, type: 'f32' },
+          uHorizon: { value: screenH * 0.35, type: 'f32' },
+          uWaveA: { value: new Float32Array([10, 1 / 25, 2, 0]), type: 'vec4<f32>' },
+          uWaveB: { value: new Float32Array([4, 1 / 90, -0.7, 0]), type: 'vec4<f32>' },
+          uRefract: { value: 1, type: 'f32' },
         },
       },
     });
@@ -247,6 +316,27 @@ export class FishBatch {
     u.uScreen[0] = w;
     u.uScreen[1] = h;
     this.mesh.boundsArea = new Rectangle(0, 0, w, h);
+  }
+
+  /**
+   * Feeds the water state, so the shoal is distorted by the same surface the
+   * water pass draws. Must be called every frame with the same wave numbers.
+   */
+  setWater(
+    time: number,
+    horizon: number,
+    waveA: readonly [number, number, number],
+    waveB: readonly [number, number, number],
+    refract = 1,
+  ): void {
+    const u = this.shader.resources.fishUniforms.uniforms as Record<string, number | Float32Array>;
+    u.uTime = time;
+    u.uHorizon = horizon;
+    u.uRefract = refract;
+    const a = u.uWaveA as Float32Array;
+    a[0] = waveA[0]; a[1] = waveA[1]; a[2] = waveA[2];
+    const b = u.uWaveB as Float32Array;
+    b[0] = waveB[0]; b[1] = waveB[1]; b[2] = waveB[2];
   }
 
   setAtlas(atlas: TextureSource): void {
@@ -269,6 +359,8 @@ export class FishBatch {
     d[o + 12] = f.fx; d[o + 13] = f.fy; d[o + 14] = f.fw; d[o + 15] = f.fh;
     d[o + 16] = f.alpha;
     d[o + 17] = f.bend;
+    d[o + 18] = f.pivotX;
+    d[o + 19] = f.pivotY;
     this.count++;
   }
 

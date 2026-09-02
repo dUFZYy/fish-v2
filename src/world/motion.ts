@@ -35,10 +35,19 @@ export interface MotionProfile {
   facesTravel: boolean;
 }
 
+/**
+ * A swimming fish.
+ *
+ * The bob used to be 5 px on top of the tail bend AND the depth-band drift —
+ * three vertical motions at once, which is why the shoal looked restless.
+ * The water itself now displaces every fish (fishBatch's refraction term), so
+ * the sprite's own vertical motion can be almost nothing: 1.5 px is enough to
+ * keep two fish at the same depth from moving in lockstep.
+ */
 const SWIMMER: MotionProfile = {
-  bend: Bend.Swim, wobble: 0.10, phaseRate: 2.4,
+  bend: Bend.Swim, wobble: 0.13, phaseRate: 3.0,
   driftX: 1, driftY: 0, rollAmp: 0, rollRate: 0,
-  bobAmp: 5, bobRate: 0.6, facesTravel: true,
+  bobAmp: 1.5, bobRate: 0.4, facesTravel: true,
 };
 
 /**
@@ -96,7 +105,7 @@ const FROZEN: MotionProfile = {
 const DRIFTER: MotionProfile = {
   bend: Bend.Rigid, wobble: 0, phaseRate: 0,
   driftX: 6, driftY: 0, rollAmp: 0.06, rollRate: 0.2,
-  bobAmp: 7, bobRate: 0.9, facesTravel: false,
+  bobAmp: 3, bobRate: 0.5, facesTravel: false,
 };
 
 const BOTTOM_DWELLER: MotionProfile = {
@@ -147,11 +156,11 @@ const BY_BODY: Record<string, MotionProfile> = {
   flat: BOTTOM_DWELLER,
   seahorse: { ...PLANT, wobble: 0.09, phaseRate: 1.1, driftX: 2 },
   octopus: DRIFTER,
-  squid: { ...SWIMMER, wobble: 0.06, phaseRate: 3.2 },
+  squid: { ...SWIMMER, wobble: 0.10, phaseRate: 3.6 },
   penguin: { ...SWIMMER, wobble: 0.05, phaseRate: 3.6 },
   turtle: { ...SWIMMER, wobble: 0.04, phaseRate: 1.2 },
-  ray: { ...SWIMMER, wobble: 0.13, phaseRate: 1.3 },
-  serpent: { ...SWIMMER, wobble: 0.16, phaseRate: 1.6 },
+  ray: { ...SWIMMER, wobble: 0.17, phaseRate: 1.5 },
+  serpent: { ...SWIMMER, wobble: 0.20, phaseRate: 1.8 },
   blob: { ...SWIMMER, wobble: 0.04, phaseRate: 1.0 },
   fish: SWIMMER,
 };

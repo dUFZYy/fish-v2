@@ -52,6 +52,30 @@ export class StandaloneBakes {
     return this.make(key, stripW, logicalH, scale, draw);
   }
 
+  /**
+   * Bakes only a horizontal BAND of a full-screen drawing.
+   *
+   * The scenery functions compose against the whole screen (`const horizonY =
+   * h * 0.35`), so they cannot simply be handed a smaller box — they would
+   * recompose. Instead the canvas is only the band tall and the context is
+   * translated up, so the art draws in full-screen coordinates and only the
+   * strip that actually contains ink is kept.
+   *
+   * This matters a lot: the lake's far layer has ink between y 189 and 296 of
+   * 844, so a full-screen bake at 3x threw away 85 % of an 18 MB texture.
+   * Six locations' worth of that is how a phone runs out of memory.
+   */
+  band(key: string, fullW: number, fullH: number, bandY: number, bandH: number, draw: BakeFn, scale = layout.dpr): Texture {
+    const hit = this.entries.get(key);
+    if (hit) return hit.texture;
+    let s = scale;
+    while ((fullW * s > this.maxSize || bandH * s > this.maxSize) && s > 0.5) s /= 2;
+    return this.make(key, fullW, bandH, s, (ctx, w) => {
+      ctx.translate(0, -bandY);
+      draw(ctx, w, fullH);
+    });
+  }
+
   /** Bakes art that varies in both axes, at its own full size. */
   full(key: string, logicalW: number, logicalH: number, draw: BakeFn, scale = layout.dpr): Texture {
     const hit = this.entries.get(key);

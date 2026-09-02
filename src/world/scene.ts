@@ -45,6 +45,16 @@ export type BakeFn = (ctx: CanvasRenderingContext2D, w: number, h: number) => vo
  * What the scene needs drawn, without knowing who draws it. A location
  * module supplies these; the scene bakes and places them.
  */
+/**
+ * Vertical extent of a layer, as fractions of screen height.
+ *
+ * Scenery functions draw in full-screen coordinates, but most of them only
+ * put ink in a narrow band — a treeline, a bank, a seabed. Declaring the
+ * band lets the bake keep only that strip instead of a screen-sized texture
+ * that is 85 % transparent.
+ */
+export interface Band { y: number; h: number }
+
 export interface SceneArt {
   /** id, for cache keys — must change when the art changes */
   id: string;
@@ -55,6 +65,8 @@ export interface SceneArt {
   seabed?(light: number): BakeFn;
   /** drawn above the water pass, so it is never veiled */
   near?(light: number): BakeFn;
+  /** where each layer actually has ink; omit for full screen */
+  bands?: { far?: Band; mid?: Band; near?: Band; seabed?: Band };
   /** water colours for the pass, 0..1 rgb */
   waterTop(light: number): [number, number, number];
   waterBottom(light: number): [number, number, number];
@@ -119,6 +131,14 @@ export class Scene {
   readonly reflectionLayer = new Container();
   /** the angler figure, assembled from poseable pieces */
   readonly anglerLayer = new Container();
+  /**
+   * Props that belong to the NEAR parallax group and are placed, not baked
+   * full-screen: the dock, the boat, a bucket. These have their own size and
+   * position, so baking them into a screen-sized layer would stretch them —
+   * which is exactly how the dock's planks ended up 206 px thick and its
+   * bucket became a slab across the sky.
+   */
+  readonly nearProps = new Container();
 
   constructor(atlas: TextureSource, w: number, h: number, hooks: ParticleHooks = {}) {
     this.W = w;
@@ -142,7 +162,7 @@ export class Scene {
     const near = new Container();
     far.addChild(this.farSprite);
     mid.addChild(this.midSprite);
-    near.addChild(this.nearSprite);
+    near.addChild(this.nearSprite, this.nearProps);
     this.layers = { far, mid, near };
 
     this.root.addChild(
@@ -185,6 +205,13 @@ export class Scene {
 
   private lastLightStep = -1;
   private lastLight = 1;
+  /**
+   * Keys baked for the CURRENT light step. When the light moves on, these
+   * are dropped — without that the day clock silently accumulates a
+   * screen-sized texture set per light step, and the scenery budget went
+   * from 50 MB to 100 MB in under a minute of play.
+   */
+  private liveKeys: string[] = [];
 
   private rebake(light: number): void {
     const art = this.art;
@@ -199,32 +226,45 @@ export class Scene {
     const q = step / 63;
     const id = art.id;
     const dpr = layout.dpr;
+    const previous = this.liveKeys;
+    this.liveKeys = [];
 
-    this.bgSprite.texture = standalone.strip(
-      `${id}:grad:h${this.H}:l${step}@${dpr}`, this.H, art.gradient(q, HORIZON_FRAC));
+    const gradKey = `${id}:grad:h${this.H}:l${step}@${dpr}`;
+    this.bgSprite.texture = standalone.strip(gradKey, this.H, art.gradient(q, HORIZON_FRAC));
     this.bgSprite.setSize(this.W, this.H);
+    this.liveKeys.push(gradKey);
 
-    const place = (sprite: Sprite, fn: ((l: number) => BakeFn) | undefined, name: string, overscan: number) => {
+    const place = (
+      sprite: Sprite,
+      fn: ((l: number) => BakeFn) | undefined,
+      name: string,
+      overscan: number,
+      band: Band | undefined,
+    ) => {
       if (!fn) { sprite.visible = false; return; }
       sprite.visible = true;
       // Parallax layers are drawn wider than the screen so sliding them does
       // not expose an edge.
       const w = Math.ceil(this.W * (1 + overscan * 2));
-      sprite.texture = standalone.full(`${id}:${name}:${w}x${this.H}:l${step}@${dpr}`, w, this.H, fn(q));
-      sprite.setSize(w, this.H);
+      const bandY = band ? Math.floor(band.y * this.H) : 0;
+      const bandH = band ? Math.ceil(band.h * this.H) : this.H;
+      const key = `${id}:${name}:${w}x${bandH}+${bandY}:l${step}@${dpr}`;
+      sprite.texture = standalone.band(key, w, this.H, bandY, bandH, fn(q));
+      sprite.setSize(w, bandH);
       sprite.x = -this.W * overscan;
+      sprite.y = bandY;
+      this.liveKeys.push(key);
     };
-    place(this.farSprite, art.far, 'far', PARALLAX_FAR);
-    place(this.midSprite, art.mid, 'mid', PARALLAX_MID);
-    place(this.nearSprite, art.near, 'near', PARALLAX_NEAR);
+    const bands = art.bands ?? {};
+    place(this.farSprite, art.far, 'far', PARALLAX_FAR, bands.far);
+    place(this.midSprite, art.mid, 'mid', PARALLAX_MID, bands.mid);
+    place(this.nearSprite, art.near, 'near', PARALLAX_NEAR, bands.near);
+    place(this.seabedSprite, art.seabed, 'bed', 0, bands.seabed);
 
-    if (art.seabed) {
-      this.seabedSprite.visible = true;
-      this.seabedSprite.texture = standalone.full(
-        `${id}:bed:${this.W}x${this.H}:l${step}@${dpr}`, this.W, this.H, art.seabed(q));
-      this.seabedSprite.setSize(this.W, this.H);
-    } else {
-      this.seabedSprite.visible = false;
+    // Only now drop what the previous step used: a key that is still needed
+    // was re-requested above and is a cache hit, so it never appears here.
+    for (const k of previous) {
+      if (!this.liveKeys.includes(k)) standalone.drop(k);
     }
   }
 
@@ -265,6 +305,9 @@ export class Scene {
         tier: p.tier,
       };
       this.water.update(p.time, params);
+      // The shoal is distorted by the SAME surface the water pass draws, so
+      // the fish and the wave bands move together instead of arguing.
+      this.fish.setWater(p.time, this.horizonY, WAVE_A, WAVE_B, art.deepSea ? 0.55 : 1);
     }
 
     this.particles.update(dt);

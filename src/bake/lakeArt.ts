@@ -276,44 +276,123 @@ export function drawNearScenery(ctx: CanvasRenderingContext2D, w: number, h: num
  *   deck planks: full width,             y in [1.1s, 2.1s]
  *   legs (x2):   at 10% and 75% width,   y in [2.1s, h]
  */
+/**
+ * The jetty.
+ *
+ * Rewritten. The first port drew fourteen vertical slats with 2 px gaps and
+ * a rectangle for the bucket, which read as a fence lying on its side with a
+ * blue box parked in the trees. A jetty seen from the bank is a horizontal
+ * DECK: you see its top surface foreshortened, its front edge as a darker
+ * fascia, and the plank seams running away from you across it.
+ *
+ * Composed against its own box (see game/lake.ts makeDock), not the screen:
+ *   deck top      y = 1.1 * (h/4.1)      — the value lake.ts anchors to
+ *   deck bottom   + h/4.1
+ *   posts         from the deck down to the bottom edge
+ */
 export function drawDock(ctx: CanvasRenderingContext2D, w: number, h: number, light: number): void {
   const s = h / 4.1;
-  const plankY = s * 1.1;
-  const plankH = s;
-  const legY = plankY + plankH;
-  const legW = w * 0.08;
+  const deckY = s * 1.1;
+  const deckH = s;
+  const legY = deckY + deckH;
   const legH = h - legY;
 
-  // Legs first (behind the deck).
-  ctx.fillStyle = dim('#6b4423', light);
-  for (const fx of [0.1, 0.75]) {
+  // --- posts, behind the deck ---
+  const legW = Math.max(4, w * 0.055);
+  for (const fx of [0.13, 0.72]) {
     const x = w * fx;
-    ctx.fillRect(x, legY, legW, legH);
-    ctx.fillStyle = 'rgba(40,25,10,0.35)';
-    ctx.fillRect(x, legY + legH * 0.55, legW, legH * 0.45);
-    ctx.fillStyle = dim('#6b4423', light);
+    const g = ctx.createLinearGradient(x, 0, x + legW, 0);
+    g.addColorStop(0, dim('#5c3a1d', light));
+    g.addColorStop(0.45, dim('#7a4f27', light));
+    g.addColorStop(1, dim('#4a2e16', light));
+    ctx.fillStyle = g;
+    ctx.fillRect(x, legY - deckH * 0.2, legW, legH + deckH * 0.2);
+    // waterline staining: darker and greener where it has stood in the lake
+    ctx.fillStyle = 'rgba(30,52,32,0.45)';
+    ctx.fillRect(x, legY + legH * 0.42, legW, legH * 0.58);
+    ctx.fillStyle = 'rgba(255,240,210,0.10)';
+    ctx.fillRect(x, legY - deckH * 0.2, Math.max(1, legW * 0.22), legH * 0.42);
   }
 
-  // Deck: alternating planks.
-  const plankCount = 14;
-  const plank = w / plankCount;
-  for (let i = 0; i < plankCount; i++) {
-    ctx.fillStyle = dim(i % 2 === 0 ? '#a0683a' : '#8b5a2b', light);
-    ctx.fillRect(i * plank, plankY, plank - 2, plankH);
-  }
-  ctx.fillStyle = 'rgba(0,0,0,0.25)';
-  ctx.fillRect(0, plankY + plankH - 3, w, 3);
+  // --- deck top surface, foreshortened ---
+  const topH = deckH * 0.62;
+  const topG = ctx.createLinearGradient(0, deckY, 0, deckY + topH);
+  topG.addColorStop(0, dim('#b4783f', light));
+  topG.addColorStop(1, dim('#96602f', light));
+  ctx.fillStyle = topG;
+  ctx.fillRect(0, deckY, w, topH);
 
-  // Bucket, sitting on the deck near the right side.
-  const bx = w * 0.62;
-  const bw = plankH * 0.9;
-  const bh = plankH * 1.1;
-  ctx.fillStyle = dim('#4a6fa5', light);
-  ctx.fillRect(bx, plankY - bh, bw, bh);
-  ctx.strokeStyle = dim('#2d4a75', light);
-  ctx.lineWidth = 2;
+  // plank seams running ACROSS the deck, i.e. away from the viewer
+  ctx.strokeStyle = 'rgba(58,34,14,0.42)';
+  ctx.lineWidth = Math.max(1, w * 0.004);
+  const planks = 9;
+  for (let i = 1; i < planks; i++) {
+    const x = (w / planks) * i;
+    ctx.beginPath();
+    // slight splay, so the seams read as perspective rather than as a grid
+    ctx.moveTo(x, deckY);
+    ctx.lineTo(x + (x - w * 0.5) * 0.06, deckY + topH);
+    ctx.stroke();
+  }
+  // grain: a few long strokes along the deck
+  ctx.strokeStyle = 'rgba(255,238,205,0.09)';
+  ctx.lineWidth = Math.max(1, topH * 0.06);
+  for (let i = 0; i < 3; i++) {
+    const y = deckY + topH * (0.25 + i * 0.25);
+    ctx.beginPath();
+    ctx.moveTo(w * 0.04, y);
+    ctx.lineTo(w * 0.96, y + prnd(i, 21) * 2 - 1);
+    ctx.stroke();
+  }
+
+  // --- front fascia: the edge board you actually see from the bank ---
+  const facY = deckY + topH;
+  const facH = deckH - topH;
+  const facG = ctx.createLinearGradient(0, facY, 0, facY + facH);
+  facG.addColorStop(0, dim('#6f4523', light));
+  facG.addColorStop(1, dim('#53321a', light));
+  ctx.fillStyle = facG;
+  ctx.fillRect(0, facY, w, facH);
+  // shadow the deck casts on its own edge
+  ctx.fillStyle = 'rgba(0,0,0,0.28)';
+  ctx.fillRect(0, facY, w, Math.max(1, facH * 0.22));
+  // nail heads along the fascia
+  ctx.fillStyle = 'rgba(40,26,12,0.55)';
+  for (let i = 0; i < planks; i++) {
+    const x = (w / planks) * (i + 0.5);
+    ctx.beginPath();
+    ctx.arc(x, facY + facH * 0.55, Math.max(0.8, w * 0.0055), 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // --- bucket, standing ON the deck ---
+  // The old version was a flat blue rect placed above the deck line, so it
+  // floated in the treeline. A bucket is tapered, has a rim and a handle,
+  // and it sits with its base on the boards.
+  const bw = deckH * 0.78;
+  const bh = deckH * 0.92;
+  const bx = w * 0.5 - bw * 0.5;
+  const by = deckY + topH * 0.35 - bh;     // base rests on the deck surface
+  const bodyG = ctx.createLinearGradient(bx, 0, bx + bw, 0);
+  bodyG.addColorStop(0, dim('#3d5d8c', light));
+  bodyG.addColorStop(0.4, dim('#5b86c2', light));
+  bodyG.addColorStop(1, dim('#32496e', light));
+  ctx.fillStyle = bodyG;
   ctx.beginPath();
-  ctx.arc(bx + bw * 0.5, plankY - bh, bw * 0.5, Math.PI, 0);
+  ctx.moveTo(bx + bw * 0.08, by);
+  ctx.lineTo(bx + bw * 0.92, by);
+  ctx.lineTo(bx + bw * 0.78, by + bh);
+  ctx.lineTo(bx + bw * 0.22, by + bh);
+  ctx.closePath();
+  ctx.fill();
+  // rim
+  ctx.fillStyle = dim('#6f9ad6', light);
+  ctx.fillRect(bx + bw * 0.05, by, bw * 0.9, Math.max(1, bh * 0.1));
+  // handle
+  ctx.strokeStyle = dim('#7f8c9c', light);
+  ctx.lineWidth = Math.max(1, bw * 0.075);
+  ctx.beginPath();
+  ctx.arc(bx + bw * 0.5, by + bh * 0.04, bw * 0.42, Math.PI * 1.06, Math.PI * 1.94);
   ctx.stroke();
 }
 

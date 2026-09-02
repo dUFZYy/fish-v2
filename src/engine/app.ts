@@ -127,6 +127,13 @@ export class Engine {
     }
   }
 
+  /**
+   * Effect tier for the shaders: 2 = full, 1 = cheap. Tied to the resolution
+   * tier, because a device that cannot afford the pixels cannot afford the
+   * per-pixel work over them either.
+   */
+  get qualityTier(): number { return this.tier === 'perf' ? 1 : 2; }
+
   get currentTier(): string { return `${this.tier} ${layout.dpr.toFixed(2)}x ${this.app.renderer.width}x${this.app.renderer.height}`; }
 }
 

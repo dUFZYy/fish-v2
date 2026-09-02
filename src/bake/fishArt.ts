@@ -47,6 +47,34 @@ export interface DrawOpts {
   shiny?: boolean;
   /** 0 (night) .. 1 (day). Baked in as a same-shape darken pass, see `colorUtil.nightTintColor`. */
   light?: number;
+  /**
+   * Leave out the caudal (tail) fin and the near pectoral fin.
+   *
+   * Those two are the ones the old game animated per frame, and animating
+   * them by bending the whole sprite is what made the fish look like they
+   * were wobbling instead of swimming. With this set, the renderer bakes
+   * them as separate little sprites (see `tailPart`/`pecFinPart`) and swings
+   * each about its own root — so the tail sweeps, the pectoral fin sculls,
+   * and the body stays a body.
+   */
+  omitAnimatedFins?: boolean;
+}
+
+/**
+ * A limb that is baked on its own and animated by the renderer.
+ *
+ * All values are FRACTIONS, so they survive any sprite size:
+ *   pivotX/Y   the rotation point inside the part's own sprite, -0.5..0.5
+ *   anchorX/Y  where that pivot sits on the BODY sprite, -0.5..0.5
+ *   wFrac/hFrac the part's size relative to the body sprite's width
+ */
+export interface PartSpec {
+  pivotX: number;
+  pivotY: number;
+  anchorX: number;
+  anchorY: number;
+  wFrac: number;
+  hFrac: number;
 }
 
 interface Col {
@@ -230,7 +258,7 @@ function drawFrozenOverlay(c: CanvasRenderingContext2D, L: number, Hh: number): 
 // minus the turn-squash / silhouette / haze / caustic / halo material listed
 // in the file header above. `tail` is kept as a real parameter (see header);
 // `drawSpecies` calls this with `tail = 0`.
-function drawGenericFish(c: CanvasRenderingContext2D, sp: Species, col: Col, L: number, Hh: number, tail: number): void {
+function drawGenericFish(c: CanvasRenderingContext2D, sp: Species, col: Col, L: number, Hh: number, tail: number, omitFins = false): void {
   const { body, belly, fin } = col;
   const pattern = sp.pattern;
   const fine = L >= 9; // detail threshold (gills/fin-rays/eye-highlight), verbatim fish.js:498
@@ -241,7 +269,7 @@ function drawGenericFish(c: CanvasRenderingContext2D, sp: Species, col: Col, L: 
   // the GPU vertex shader (`src/world/fishBatch.ts`) re-adds this wobble at
   // runtime, so it is fixed at tw=0 (tail=0) here.
   const tw = Math.sin(tail) * Hh * 0.45;
-  {
+  if (!omitFins) {
     const tr = shadeColor(fin, -0.3);
     const [tr0, tr1, tr2] = tr.match(/[\d.]+/g)!.map(Number);
     const fg = c.createLinearGradient(-L * 0.8, 0, -L * 1.45, 0);
@@ -279,7 +307,10 @@ function drawGenericFish(c: CanvasRenderingContext2D, sp: Species, col: Col, L: 
   c.quadraticCurveTo(-L * 0.5, Hh * 1.15, -L * 0.18, Hh * 0.82);
   c.closePath(); c.fill();
 
-  // far pectoral fin — ANIMATED (`sin(tail*0.9+2.6)`, fish.js:545) via rocking rotation, fixed at 0 here
+  // far pectoral fin — ANIMATED (`sin(tail*0.9+2.6)`, fish.js:545) via rocking
+  // rotation. This one stays baked even when the near fin is split out: it is
+  // on the far side of the body, mostly hidden, and a third instance per fish
+  // for something you can barely see is not worth the vertex.
   {
     c.save();
     c.translate(L * 0.02, Hh * 0.34);
@@ -411,7 +442,7 @@ function drawGenericFish(c: CanvasRenderingContext2D, sp: Species, col: Col, L: 
 
   // near pectoral fin — ANIMATED (`sin(tail*0.9+1.2)`, fish.js:687), fixed at 0 here.
   const finRot = 0.35 + Math.sin(tail * 0.9 + 1.2) * 0.3;
-  {
+  if (!omitFins) {
     c.save();
     fishBodyPath(c, L, Hh); c.clip();
     c.translate(L * 0.19, Hh * 0.38);
@@ -424,6 +455,7 @@ function drawGenericFish(c: CanvasRenderingContext2D, sp: Species, col: Col, L: 
     c.closePath(); c.fill();
     c.restore();
   }
+  if (!omitFins) {
   c.save();
   c.translate(L * 0.16, Hh * 0.3);
   c.rotate(finRot);
@@ -441,6 +473,7 @@ function drawGenericFish(c: CanvasRenderingContext2D, sp: Species, col: Col, L: 
   c.quadraticCurveTo(-L * 0.16, Hh * 0.5, 0, 0);
   c.closePath(); c.fill();
   c.restore();
+  }
 
   // whiskers — ANIMATED on the longer one (`sin(tail)`, fish.js:722), fixed at 0.
   if (pattern === 'whiskers') {
@@ -1477,7 +1510,7 @@ export function drawSpecies(ctx: CanvasRenderingContext2D, w: number, h: number,
     }
     default: {
       const Hh = L * sp.h * 0.5;
-      drawGenericFish(ctx, sp, col, L, Hh, 0);
+      drawGenericFish(ctx, sp, col, L, Hh, 0, !!opts.omitAnimatedFins);
     }
   }
 
@@ -1495,4 +1528,186 @@ export function drawSpecies(ctx: CanvasRenderingContext2D, w: number, h: number,
     ctx.fillRect(0, 0, w, h);
     ctx.restore();
   }
+}
+
+
+/**
+ * Shiny filter, shared by the body and its detachable fins so a shiny fish
+ * does not end up with ordinary fins. Verbatim `fish.js:476-479`.
+ */
+function applyShiny(ctx: CanvasRenderingContext2D, opts: DrawOpts, L = 10): void {
+  if (!opts.shiny) return;
+  if ('filter' in ctx) (ctx as CanvasRenderingContext2D & { filter: string }).filter = 'hue-rotate(150deg) saturate(1.7) brightness(1.15)';
+  ctx.shadowColor = '#ffe680';
+  ctx.shadowBlur = L * 0.9;
+}
+
+/**
+ * Night tint, same-shape darken pass. `source-atop` keeps it inside the ink
+ * that is already there, which is why it can be baked at all — the old game
+ * did this with a second full-screen layer, and a second full-screen layer is
+ * the thing this rebuild exists to remove.
+ */
+function finishTint(ctx: CanvasRenderingContext2D, w: number, h: number, opts: DrawOpts): void {
+  if ('filter' in ctx) (ctx as CanvasRenderingContext2D & { filter: string }).filter = 'none';
+  ctx.shadowBlur = 0;
+  const light = opts.light == null ? 1 : opts.light;
+  if (light >= 0.999) return;
+  ctx.save();
+  ctx.globalCompositeOperation = 'source-atop';
+  ctx.fillStyle = nightTintColor(light);
+  ctx.fillRect(0, 0, w, h);
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------------------
+// Animated limbs, baked separately
+//
+// The caudal fin and the near pectoral fin were the two things the old game
+// moved every frame, and they are the reason its fish looked alive. Bending
+// the whole sprite to fake that made the body wobble instead, which is worse
+// than not doing it at all.
+//
+// So each is baked into its own little sprite and the renderer swings it
+// about its root. Cost: two extra instances in a batch that already draws in
+// one call, i.e. two more quads per fish and no extra draw call. The old
+// renderer paid a full path fill per fin per fish per frame.
+//
+// Only the generic fish rig has these. Creatures (jellyfish, crab, starfish,
+// octopus …) have their own limbs and their own motion and are left whole.
+
+/** true if this species uses the generic fish rig and can have split fins */
+export function hasSplitFins(sp: Species): boolean {
+  return sp.bodyType !== 'creature' && sp.bodyType !== 'boot'
+    && sp.bodyType !== 'bottle' && sp.bodyType !== 'chest';
+}
+
+/** shared frame maths: how the body's unit box maps onto its sprite */
+function bodyFrame(sp: Species): { units: Bounds; cx: number; cy: number; uw: number; uh: number } {
+  const units = bodyBounds(sp);
+  const uw = units.xMax - units.xMin;
+  const uh = units.yMax - units.yMin;
+  return { units, cx: (units.xMin + units.xMax) / 2, cy: (units.yMin + units.yMax) / 2, uw, uh };
+}
+
+/**
+ * The caudal fin: root at x = -0.8 L, sweeping back to -1.45 L and out to
+ * ±0.9 Hh — the numbers are read straight off the tail path in
+ * `drawGenericFish`. Pivot at the root, so it sweeps like a fin and not like
+ * a flag on a pole.
+ */
+const TAIL_BOX = { x0: -1.5, x1: -0.74, y0: -1.05, y1: 1.05 };
+
+export function tailPart(sp: Species): PartSpec {
+  const { cx, cy, uw, uh } = bodyFrame(sp);
+  const hh = sp.h * 0.5;
+  const y0 = TAIL_BOX.y0 * hh, y1 = TAIL_BOX.y1 * hh;
+  const w = TAIL_BOX.x1 - TAIL_BOX.x0;
+  const h = y1 - y0;
+  return {
+    // the root sits at x = -0.74 (the box's right edge) and y = 0
+    pivotX: 0.5,
+    pivotY: (0 - (y0 + y1) / 2) / h,
+    anchorX: (TAIL_BOX.x1 - cx) / uw,
+    anchorY: (0 - cy) / uh,
+    wFrac: w / uw,
+    hFrac: h / uw,     // relative to the body's WIDTH, so aspect is preserved
+  };
+}
+
+export function drawTailFin(ctx: CanvasRenderingContext2D, w: number, h: number, sp: Species, opts: DrawOpts = {}): void {
+  const hh = sp.h * 0.5;
+  const y0 = TAIL_BOX.y0 * hh, y1 = TAIL_BOX.y1 * hh;
+  const L = w / (TAIL_BOX.x1 - TAIL_BOX.x0);
+  const Hh = L * hh;
+  ctx.save();
+  applyShiny(ctx, opts);
+  ctx.translate(-TAIL_BOX.x0 * L, -y0 * L);
+  const fin = sp.colors.fin;
+  const tr = shadeColor(fin, -0.3);
+  const [tr0, tr1, tr2] = tr.match(/[\d.]+/g)!.map(Number);
+  // Opaque along its whole length. In the body bake this gradient faded to
+  // 50 % alpha because the body was drawn ON TOP and the fin had to blend
+  // into it; as its own sprite there is nothing underneath, and the fade
+  // only thinned the fin against the water — which read as a dark stain
+  // instead of a fin.
+  const fg = ctx.createLinearGradient(-L * 0.8, 0, -L * 1.45, 0);
+  fg.addColorStop(0, fin);
+  fg.addColorStop(0.55, `rgb(${tr0},${tr1},${tr2})`);
+  fg.addColorStop(1, shadeColor(fin, -0.42));
+  ctx.fillStyle = fg;
+  ctx.beginPath();
+  ctx.moveTo(-L * 0.8, -Hh * 0.28);
+  ctx.quadraticCurveTo(-L * 1.12, -Hh * 0.55, -L * 1.4, -Hh * 0.9);
+  ctx.quadraticCurveTo(-L * 1.16, -Hh * 0.28, -L * 1.14, 0);
+  ctx.quadraticCurveTo(-L * 1.16, Hh * 0.28, -L * 1.4, Hh * 0.9);
+  ctx.quadraticCurveTo(-L * 1.12, Hh * 0.55, -L * 0.8, Hh * 0.28);
+  ctx.closePath();
+  ctx.fill();
+  if (L >= 9) {
+    ctx.strokeStyle = shadeColor(fin, -0.35);
+    ctx.globalAlpha *= 0.5;
+    ctx.lineWidth = Math.max(0.6, L * 0.025);
+    for (const k of [-0.55, 0, 0.55]) {
+      ctx.beginPath();
+      ctx.moveTo(-L * 0.84, Hh * 0.14 * Math.sign(k || 1) * Math.abs(k) * 2);
+      ctx.quadraticCurveTo(-L * 1.1, Hh * k * 0.8, -L * 1.32, Hh * k * 1.5);
+      ctx.stroke();
+    }
+    ctx.globalAlpha /= 0.5;
+  }
+  finishTint(ctx, w, h, opts);
+  ctx.restore();
+}
+
+/**
+ * The near pectoral fin: root at (0.16 L, 0.3 Hh), reaching to -0.42 L and
+ * +0.62 Hh. Pivot at the root, at the box's top-right.
+ */
+const FIN_BOX = { x0: -0.5, x1: 0.22, y0: -0.06, y1: 0.72 };
+
+export function pecFinPart(sp: Species): PartSpec {
+  const { cx, cy, uw, uh } = bodyFrame(sp);
+  const hh = sp.h * 0.5;
+  const y0 = FIN_BOX.y0 * hh, y1 = FIN_BOX.y1 * hh;
+  const w = FIN_BOX.x1 - FIN_BOX.x0;
+  const h = y1 - y0;
+  const rootX = 0.16, rootY = 0.3 * hh;
+  return {
+    pivotX: (rootX - (FIN_BOX.x0 + FIN_BOX.x1) / 2) / w,
+    pivotY: (rootY - (y0 + y1) / 2) / h,
+    anchorX: (rootX - cx) / uw,
+    anchorY: (rootY - cy) / uh,
+    wFrac: w / uw,
+    hFrac: h / uw,
+  };
+}
+
+export function drawPecFin(ctx: CanvasRenderingContext2D, w: number, h: number, sp: Species, opts: DrawOpts = {}): void {
+  const hh = sp.h * 0.5;
+  const y0 = FIN_BOX.y0 * hh;
+  const L = w / (FIN_BOX.x1 - FIN_BOX.x0);
+  const Hh = L * hh;
+  ctx.save();
+  applyShiny(ctx, opts);
+  ctx.translate(-FIN_BOX.x0 * L, -y0 * L);
+  ctx.translate(L * 0.16, Hh * 0.3);
+  const fr = shadeColor(sp.colors.fin, -0.08);
+  const [fr0, fr1, fr2] = fr.match(/[\d.]+/g)!.map(Number);
+  // Same reasoning as the tail: opaque, because there is no body under it
+  // any more. A touch of translucency at the trailing edge is fine and reads
+  // as a thin membrane; half-alpha across the whole fin did not.
+  const g = ctx.createLinearGradient(0, 0, -L * 0.42, Hh * 0.62);
+  g.addColorStop(0, `rgb(${fr0},${fr1},${fr2})`);
+  g.addColorStop(0.7, shadeColor(sp.colors.fin, -0.22));
+  g.addColorStop(1, `rgba(${fr0},${fr1},${fr2},0.82)`);
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.quadraticCurveTo(-L * 0.34, Hh * 0.18, -L * 0.42, Hh * 0.62);
+  ctx.quadraticCurveTo(-L * 0.16, Hh * 0.5, 0, 0);
+  ctx.closePath();
+  ctx.fill();
+  finishTint(ctx, w, h, opts);
+  ctx.restore();
 }
