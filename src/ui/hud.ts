@@ -14,7 +14,7 @@
 
 import { el, woodButton, countBadge } from './dom';
 import { bakeIcon, type IconId } from './icons';
-import { shadeColor } from './wood';
+import { applyNineSlice, bakePanel, shadeColor } from './wood';
 import { t } from './i18n';
 
 export type TimeOfDay = 'day' | 'dusk' | 'night';
@@ -140,6 +140,11 @@ export class Hud {
     // --- status card -------------------------------------------------
     this.statusCard = el('button', 'hud-status');
     this.statusCard.setAttribute('type', 'button');
+    // The status card was the only wooden element left undressed — every
+    // other board in the HUD goes through woodButton, which applies the
+    // nine-slice itself, so this one silently rendered as floating text over
+    // the sky.
+    applyNineSlice(this.statusCard, bakePanel({ w: 250, h: 64, r: 12, slice: 22, seed: 17 }));
     const row1 = el('div', 'hud-status-row1');
     const coinIco = el('img', 'hud-coin-icon') as HTMLImageElement;
     coinIco.src = bakeCoinIcon(20); coinIco.alt = '';

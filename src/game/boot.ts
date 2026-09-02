@@ -3,18 +3,20 @@ import { baker } from '@/bake/baker';
 import { standalone } from '@/bake/standalone';
 import { Scene } from '@/world/scene';
 import { Shoal } from '@/world/shoal';
+import { Tackle } from '@/world/tackle';
 import { layout } from '@/engine/layout';
 import { LAKE, lakeArt, makeDock, setSkyPhase, skyStateFor, DAY_SECONDS } from './lake';
+import { Session } from './session';
 import { audio } from '@/audio/engine';
 import { sfx, panFor } from '@/audio/sfx';
+import { Hud, type HudState } from '@/ui/hud';
 
 /**
- * The lake, standing up.
+ * Boot — wiring only.
  *
- * This is the first build in which the real content meets the real renderer:
- * the ported scenery, the ported species with their own body shapes, the
- * water pass, the particles. No gameplay yet — the state machine, drill and
- * catch are ported and tested but not wired, which is the next step.
+ * Every part is built and connected here and nowhere else: the scene owns
+ * layer order, the shoal owns the fish, the session owns the rules, the HUD
+ * owns the DOM. This file introduces them to each other.
  *
  * Switches, all readable off the device with ?perf=1:
  *   ?fish=N     interactive fish in the water (load test)
@@ -39,28 +41,38 @@ export async function startGame(): Promise<void> {
   if (!waterOn) scene.water.mesh.visible = false;
 
   const art = lakeArt(LAKE);
-  setSkyPhase(frozenDay ?? 0.42);
-  scene.setArt(art, skyStateFor(frozenDay ?? 0.42, engine.W, engine.H, LAKE).light);
+  let dayTime = frozenDay ?? 0.42;
+  setSkyPhase(dayTime);
+  scene.setArt(art, skyStateFor(dayTime, engine.W, engine.H, LAKE).light);
 
   // The dock is a placed sprite in the near parallax group, not part of the
   // screen-sized near bake — see makeDock for why.
-  let dock = makeDock(scene.horizonY, skyStateFor(frozenDay ?? 0.42, engine.W, engine.H, LAKE).light);
+  let dock = makeDock(scene.horizonY, skyStateFor(dayTime, engine.W, engine.H, LAKE).light);
   scene.nearProps.addChild(dock);
 
   const shoal = new Shoal(scene, { count, distantCount: distant });
   shoal.setLocation(LAKE.id, false);
 
-  // --- the day clock -------------------------------------------------------
-  // 300 seconds per in-game day, as in the old game. The palette is resolved
-  // from the phase, the scene quantises the resulting light to 64 steps for
-  // its cache, and the bakes are handed that same quantised value — if the
-  // two disagreed, the baked hills would be lit differently from the live
-  // grass in front of them and the seam would show exactly at that edge.
-  let dayTime = frozenDay ?? 0.42;
+  const tackle = new Tackle(scene);
+
+  // --- the HUD, as small DOM elements over the canvas ---------------------
+  const uiHost = document.getElementById('ui')!;
+  const hud = new Hud(uiHost, {
+    onMenu: () => hud.toast('Menü folgt'),
+  });
+
+  // --- the session: the only place a game event becomes a sound ------------
+  const session = new Session(scene, shoal, {
+    onToast: (text) => hud.toast(text),
+    onLost: (text) => hud.toast(text),
+    onCatch: (r, sp) => {
+      hud.toast(`${sp.nameDe}  +${r.coins}`);
+    },
+  });
 
   // --- ambient life --------------------------------------------------------
-  // A bubble now and then, and a ripple where a fish breaks the surface.
-  // Cheap, and it is what stops still water looking like a photograph.
+  // A bubble now and then. Cheap, and it is what stops still water looking
+  // like a photograph.
   let bubbleTimer = 0;
 
   engine.onUpdate((dt, t) => {
@@ -69,9 +81,25 @@ export async function startGame(): Promise<void> {
       setSkyPhase(dayTime);
     }
     const sky = skyStateFor(dayTime, engine.W, engine.H, LAKE);
-
     const wBot = art.waterBottom(sky.light);
+
+    session.update(dt);
     shoal.update(dt, t, sky.light, wBot);
+
+    const st = session.state;
+    const tip = { x: engine.W * 0.72, y: scene.horizonY - 62 };
+    const lineOut = st.phase !== 'ready' && st.phase !== 'casting';
+    tackle.update(t, {
+      tipX: tip.x,
+      tipY: tip.y,
+      bobberX: lineOut ? st.bobberX : null,
+      bobberY: lineOut ? st.bobberY : null,
+      hookX: st.hookX,
+      hookY: st.hookY,
+      tension: st.reel?.tension ?? 0,
+      fighting: st.phase === 'reeling' || st.phase === 'biting',
+      light: sky.light,
+    });
 
     bubbleTimer -= dt;
     if (bubbleTimer <= 0) {
@@ -82,33 +110,34 @@ export async function startGame(): Promise<void> {
       if (Math.random() < 0.25 && audio.ready) sfx.bubble(panFor(x / engine.W));
     }
 
+    // The camera drifts toward whatever the player is looking at: the bobber
+    // while fishing, the middle of the water otherwise. Slow, so it reads as
+    // a camera and not as a slide.
+    const focusX = lineOut ? st.bobberX : engine.W * 0.5;
+    lookX += ((focusX - engine.W * 0.5) * 0.09 - lookX) * Math.min(1, dt * 1.2);
+
     scene.update(dt, {
       light: sky.light,
       time: t,
       sun: sky.sun,
-      // The look drifts slowly, which is what makes the parallax read as a
-      // camera rather than as a slide. The game will drive this from the
-      // bobber once casting is wired.
-      lookX: Math.sin(t * 0.07) * 14,
-      lookY: Math.sin(t * 0.05) * 5,
+      lookX,
+      lookY: Math.sin(t * 0.05) * 4,
       tier: engine.qualityTier,
     });
+
+    hud.update(hudStateFrom(session, dayTime));
   });
 
-  // --- one tap makes a splash, so the build is visibly alive ---------------
+  let lookX = 0;
+
+  // --- input: one tap does everything, as in the old game -----------------
   engine.app.stage.eventMode = 'static';
   engine.app.stage.hitArea = { contains: () => true };
   engine.app.stage.on('pointerdown', (e: { global: { x: number; y: number } }) => {
-    const x = e.global.x;
-    const y = e.global.y;
-    audio.init();
-    if (y < scene.horizonY) return;
-    const surface = scene.waveAt(x, 0);
-    scene.particles.splash(x, surface, 14, 1);
-    scene.particles.ripple(x, surface, 44, 2);
-    scene.shake.add(2);
-    sfx.plop(panFor(x / engine.W));
+    session.onPointerDown(e.global.x, e.global.y);
   });
+  engine.app.stage.on('pointerup', () => session.onPointerUp());
+  engine.app.stage.on('pointerupoutside', () => session.onPointerUp());
 
   const onResize = () => {
     scene.resize(engine.W, engine.H);
@@ -124,8 +153,29 @@ export async function startGame(): Promise<void> {
   window.visualViewport?.addEventListener('resize', onResize);
 
   (window as unknown as { __game: unknown }).__game = {
-    scene, shoal, baker, standalone,
-    report: () => `${scene.report()}  ${baker.report()}  scn ${standalone.report().mb}MB  ${layout.W}x${layout.H}@${layout.dpr}`,
+    scene, shoal, session, tackle, hud, baker, standalone,
+    report: () => `${scene.report()}  ${baker.report()}  scn ${standalone.report().mb}MB  ${layout.W}x${layout.H}@${layout.dpr}  ${session.state.phase}`,
+  };
+}
+
+/** the session's view plus the clock, in the shape the HUD wants */
+function hudStateFrom(session: Session, dayTime: number): HudState {
+  const v = session.view();
+  const minutes = Math.floor(dayTime * 24 * 60);
+  const hh = String(Math.floor(minutes / 60)).padStart(2, '0');
+  const mm = String(minutes % 60).padStart(2, '0');
+  const night = dayTime < 0.22 || dayTime > 0.78;
+  return {
+    coins: v.coins,
+    gems: v.gems,
+    clock: `${hh}:${mm}`,
+    timeOfDay: night ? 'night' : dayTime > 0.68 ? 'dusk' : 'day',
+    level: v.level,
+    anglerTitle: 'Anfänger',
+    xp: v.xp,
+    xpToNext: v.xpNeeded,
+    rod: { name: 'Holzrute' },
+    bait: { name: 'Regenwurm' },
   };
 }
 
