@@ -215,3 +215,266 @@ html, body {
   white-space: nowrap;
 }
 .hud-toast.is-live { opacity: 1; transform: translateY(-46px); transition: opacity 1.2s ease-in 0.2s, transform 1.4s ease-out; }
+
+/* ==========================================================================
+   Sheet — the wood bottom-sheet menu container (src/ui/sheet.ts).
+   Spec 05-ui-hub-story.md §1.0: bottom-aligned, slides up ~200ms cubic
+   ease-out with a small overshoot, closes ~110ms quadratic ease-in, no
+   overshoot. `max-height` uses `cqh` (needs a `container-type: size`
+   ancestor — #ui already declares one above; the dev sheet's stage frame
+   declares its own, see dev/screens.html) so the 240px floor / "most of the
+   screen" ceiling is measured against the box the sheet actually fills.
+   ========================================================================== */
+
+.sheet-root { position: absolute; inset: 0; z-index: 20; }
+
+.sheet-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  transition: opacity 110ms cubic-bezier(0.4, 0, 1, 1);
+}
+.sheet-root.is-open .sheet-scrim { opacity: 1; transition: opacity 200ms ease-out; }
+
+.sheet-panel {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 240px;
+  max-height: calc(100cqh - 40px);
+  transform: translateY(calc(100% + 24px));
+  transition: transform 110ms cubic-bezier(0.4, 0, 1, 1);
+  box-sizing: border-box;
+}
+/* cubic-bezier(0.34,1.56,0.64,1) is a standard "back-out" curve — the small
+   overshoot the spec describes as the panel "setting down" once, approximated
+   with a CSS easing curve rather than the original's explicit half-sine term. */
+.sheet-root.is-open .sheet-panel {
+  transform: translateY(0);
+  transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.sheet-header { display: flex; align-items: center; gap: 10px; padding: 12px 12px 10px; flex: none; }
+.sheet-icon-tile { width: 40px; height: 40px; flex: none; position: relative; }
+.sheet-icon-img { position: absolute; inset: 0; margin: auto; width: 22px; height: 22px; }
+.sheet-title {
+  flex: 1;
+  min-width: 0;
+  color: #f5ecd8;
+  font: 700 17px 'Baloo 2', 'Segoe UI', system-ui, sans-serif;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-bottom: 2px dashed var(--sheet-accent, #ffd23a);
+  padding-bottom: 4px;
+}
+.sheet-close { width: 40px; height: 40px; flex: none; font-size: 15px; }
+
+.sheet-tabs { display: flex; gap: 6px; padding: 0 12px 10px; overflow-x: auto; flex: none; }
+.sheet-tab {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(0, 0, 0, 0.28);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.75);
+  font: 700 11px 'Baloo 2', 'Segoe UI', system-ui, sans-serif;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 10px;
+  flex: none;
+  position: relative;
+  cursor: pointer;
+}
+.sheet-tab.is-active { background: var(--sheet-accent, #ffd23a); color: #201400; border-color: transparent; }
+.sheet-tab-icon { width: 16px; height: 16px; }
+.sheet-tab-label { white-space: nowrap; }
+.sheet-tab-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 2px;
+  border-radius: 50%;
+  background: #e0483c;
+  color: #fff;
+  font: 700 9px 'Baloo 2', sans-serif;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(12, 22, 34, 0.55);
+}
+
+.sheet-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 12px 16px; -webkit-overflow-scrolling: touch; }
+
+/* ==========================================================================
+   Screens content (src/ui/screens.ts) — Fischdex, Shop, Aufträge,
+   Einstellungen, Erfolge. All mounted into one Sheet's `.sheet-body`.
+   ========================================================================== */
+
+.dex-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 10px; }
+.dex-cell {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid var(--rarity-color, rgba(255, 255, 255, 0.2));
+  background: rgba(20, 10, 4, 0.34);
+  border-radius: 8px;
+  padding: 8px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  position: relative;
+  cursor: pointer;
+  color: #f5ecd8;
+}
+.dex-cell.is-locked { opacity: 0.82; }
+.dex-cell-name { font: 700 12px 'Baloo 2', sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.dex-cell-info { font: 400 10.5px 'Baloo 2', sans-serif; color: rgba(255, 255, 255, 0.7); }
+.dex-cell-info.is-dim { color: rgba(255, 255, 255, 0.4); }
+.dex-cell-badge { position: absolute; top: 4px; right: 4px; background: #e0483c; color: #fff; font: 700 8.5px 'Baloo 2', sans-serif; padding: 1px 5px; border-radius: 8px; }
+.dex-cell-sparkle { position: absolute; top: 4px; left: 4px; width: 14px; height: 14px; }
+.dex-footer { margin-top: 10px; text-align: center; font: 400 12px 'Baloo 2', sans-serif; color: rgba(255, 255, 255, 0.6); }
+
+.dex-detail { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.dex-detail-card {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  border: 2px solid var(--rarity-color, #ffd23a);
+  border-radius: 10px;
+  padding: 14px;
+  background: rgba(20, 10, 4, 0.3);
+  color: #f5ecd8;
+  text-align: center;
+}
+.dex-detail-name { font: 700 18px 'Baloo 2', sans-serif; color: var(--rarity-color, #ffd23a); }
+.dex-detail-rarity { font: 700 12px 'Baloo 2', sans-serif; color: rgba(255, 255, 255, 0.75); }
+.dex-detail-meta { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; font: 400 12px 'Baloo 2', sans-serif; color: rgba(255, 255, 255, 0.7); }
+.dex-detail-body { font: 400 13px/1.4 'Baloo 2', sans-serif; color: rgba(255, 255, 255, 0.85); max-width: 320px; }
+.dex-detail-stats { font: 700 12px 'Baloo 2', sans-serif; color: #ffd23a; }
+
+.shop-list { display: flex; flex-direction: column; gap: 8px; }
+.shop-row { display: flex; align-items: center; gap: 10px; background: rgba(20, 10, 4, 0.3); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; padding: 10px; }
+.shop-row.is-equipped { border-color: rgba(63, 157, 82, 0.6); background: rgba(63, 157, 82, 0.12); }
+.shop-row-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.shop-row-name { font: 700 14px 'Baloo 2', sans-serif; color: #f5ecd8; }
+.shop-row-desc { font: 400 11.5px 'Baloo 2', sans-serif; color: rgba(255, 255, 255, 0.65); }
+.shop-row-stock { font: 700 11px 'Baloo 2', sans-serif; color: #ffd23a; }
+
+.quests-list { display: flex; flex-direction: column; gap: 10px; }
+.quests-row { background: rgba(20, 10, 4, 0.3); border-radius: 8px; padding: 10px; position: relative; }
+.quests-row.is-done { opacity: 0.7; }
+.quests-row-text { font: 700 13px 'Baloo 2', sans-serif; color: #f5ecd8; margin-bottom: 6px; padding-right: 22px; }
+.quests-row-bar { height: 6px; border-radius: 3px; background: rgba(0, 0, 0, 0.4); overflow: hidden; }
+.quests-row-fill { height: 100%; background: linear-gradient(90deg, #8fd3ff, #4aa3ff); }
+.quests-row-meta { margin-top: 4px; font: 400 11px 'Baloo 2', sans-serif; color: rgba(255, 255, 255, 0.6); }
+.quests-row-check { position: absolute; top: 8px; right: 10px; color: #5ad46a; font-weight: 700; }
+.quests-empty { text-align: center; padding: 20px; color: rgba(255, 255, 255, 0.7); font: 700 14px 'Baloo 2', sans-serif; }
+.quests-footer { margin-top: 10px; display: flex; flex-direction: column; gap: 2px; font: 400 11.5px 'Baloo 2', sans-serif; color: rgba(255, 255, 255, 0.55); }
+
+.settings-list { display: flex; flex-direction: column; gap: 14px; }
+.settings-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.settings-row-label { font: 700 13px 'Baloo 2', sans-serif; color: #f5ecd8; }
+.settings-slider { flex: 1; max-width: 160px; accent-color: #ffd23a; }
+.settings-lang-group, .settings-quality-group { display: flex; gap: 6px; }
+.settings-version { text-align: center; margin-top: 10px; font: 400 11px 'Baloo 2', sans-serif; color: rgba(255, 255, 255, 0.4); cursor: default; }
+
+.ach-list { display: flex; flex-direction: column; gap: 8px; }
+.ach-row { display: flex; align-items: center; gap: 10px; background: rgba(20, 10, 4, 0.3); border-radius: 8px; padding: 8px 10px; }
+.ach-row.is-locked { opacity: 0.55; }
+.ach-row-icon { width: 26px; height: 26px; flex: none; }
+.ach-row-info { flex: 1; min-width: 0; }
+.ach-row-name { font: 700 13px 'Baloo 2', sans-serif; color: #f5ecd8; }
+.ach-row-desc { font: 400 11px 'Baloo 2', sans-serif; color: rgba(255, 255, 255, 0.6); }
+.ach-row-check { color: #5ad46a; font-weight: 700; }
+
+/* ==========================================================================
+   Catch card & level-up popup (src/ui/catchCard.ts) — spec §1.11. Full-screen
+   translucent scrim (never opaque — CLAUDE.md rule 2), a small content-sized
+   card/panel, 350ms cubic scale-in.
+   ========================================================================== */
+
+.catchcard-scrim, .levelup-scrim {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+  opacity: 0;
+  transition: opacity 200ms ease-out;
+  z-index: 30;
+}
+.catchcard-scrim.is-live, .levelup-scrim.is-live { opacity: 1; }
+
+.catchcard {
+  width: min(360px, 92vw);
+  max-height: 86vh;
+  overflow-y: auto;
+  background: linear-gradient(180deg, rgba(58, 32, 14, 0.96), rgba(30, 16, 6, 0.98));
+  border: 3px solid var(--rarity-color, #ffd23a);
+  border-radius: 16px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+  color: #f5ecd8;
+  transform: scale(0.4) rotate(var(--catchcard-tilt, 0deg));
+  transition: transform 350ms cubic-bezier(0.22, 1, 0.36, 1);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.catchcard-scrim.is-live .catchcard { transform: scale(1) rotate(var(--catchcard-tilt, 0deg)); }
+
+.catchcard-header { font: 700 22px 'Baloo 2', sans-serif; margin-bottom: 4px; }
+.catchcard-name { font: 700 20px 'Baloo 2', sans-serif; color: var(--rarity-color, #ffd23a); }
+.catchcard-subtitle { font: 400 13px 'Baloo 2', sans-serif; color: rgba(255, 255, 255, 0.75); }
+.catchcard-ribbons { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 4px; }
+.catchcard-ribbon { font: 700 10.5px 'Baloo 2', sans-serif; padding: 3px 8px; border-radius: 6px; color: #1a0f04; }
+.ribbon-new { background: #5ad46a; }
+.ribbon-record { background: #ffd23a; }
+.ribbon-perfect { background: #7fd8ff; }
+.ribbon-shiny { background: #fff3a0; }
+.catchcard-coins { font: 700 26px 'Baloo 2', sans-serif; color: #ffd700; margin-top: 6px; }
+.catchcard-coins.is-stolen { color: #ff6a5a; }
+.catchcard-breakdown { font: 400 11.5px 'Baloo 2', sans-serif; color: rgba(255, 255, 255, 0.55); }
+.catchcard-seagull { font: 700 12px 'Baloo 2', sans-serif; color: #ff6a5a; }
+.catchcard-bycatch { font: 400 12px 'Baloo 2', sans-serif; color: rgba(255, 255, 255, 0.7); }
+.catchcard-footer { font: 400 11px 'Baloo 2', sans-serif; color: rgba(255, 255, 255, 0.45); margin-top: 8px; }
+.catchcard-share { margin-top: 6px; }
+
+.levelup-panel {
+  width: min(340px, 88vw);
+  background: linear-gradient(180deg, rgba(58, 32, 14, 0.96), rgba(30, 16, 6, 0.98));
+  border: 3px solid #ffd23a;
+  border-radius: 16px;
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+  color: #f5ecd8;
+  transform: scale(0.4);
+  transition: transform 350ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.levelup-scrim.is-live .levelup-panel { transform: scale(1); }
+.levelup-label { font: 700 14px 'Baloo 2', sans-serif; color: #ffd23a; letter-spacing: 1px; }
+.levelup-number { font: 800 56px 'Baloo 2', sans-serif; color: #fff; line-height: 1; }
+.levelup-title { font: 700 16px 'Baloo 2', sans-serif; }
+.levelup-reward { font: 700 20px 'Baloo 2', sans-serif; color: #ffd700; margin-top: 4px; }
+.levelup-unlock { font: 700 13px 'Baloo 2', sans-serif; color: #5ad46a; margin-top: 8px; }
+.levelup-teaser { font: 400 12px 'Baloo 2', sans-serif; color: rgba(255, 255, 255, 0.7); }
+.levelup-footer { font: 400 11px 'Baloo 2', sans-serif; color: rgba(255, 255, 255, 0.45); margin-top: 10px; }

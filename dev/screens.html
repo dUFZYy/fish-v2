@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Screens — A Silly Fishing Game</title>
+  <link rel="stylesheet" href="/src/ui/ui.css">
+  <style>
+    /* Dev-page-only chrome. Screen/sheet/catch-card styling itself comes from
+       the real src/ui/ui.css — this page must look right using the SAME
+       stylesheet the shipped game uses, not a copy. */
+    html, body { position: static; overflow: auto; height: auto; background: #2a2a2a; }
+    body { padding: 24px; color: #eee; font: 14px 'Segoe UI', system-ui, sans-serif; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    h2 { font-size: 15px; margin: 28px 0 10px; color: #ffd23a; border-bottom: 1px solid #444; padding-bottom: 4px; }
+    .sub { color: #aaa; margin: 0 0 16px; max-width: 640px; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 10px; }
+    .row button {
+      font: 700 13px 'Segoe UI', sans-serif;
+      padding: 9px 14px;
+      border-radius: 6px;
+      border: 1px solid #555;
+      background: #333;
+      color: #fff;
+      cursor: pointer;
+    }
+    .row button:hover { background: #3d3d3d; }
+    #lang-toggle { position: fixed; top: 16px; right: 16px; z-index: 100; }
+    #lang-toggle button { font: 700 13px sans-serif; padding: 8px 14px; border-radius: 6px; border: 1px solid #555; background: #333; color: #fff; cursor: pointer; }
+    #lang-toggle button.active { background: #d9a92b; color: #201400; border-color: #d9a92b; }
+    /* Stands in for the real `#ui` (container-type: size in ui.css) so the
+       sheet's `cqh`-based max-height and the HUD-style width math measure
+       THIS bounded box, not the dev page's own (much taller) document. A
+       static image-free background per the task brief — no scene art. */
+    #stage {
+      position: relative;
+      width: 390px;
+      height: 844px;
+      max-width: 100%;
+      background: #1c4f6b;
+      background-image: linear-gradient(180deg, #2f6f8f 0%, #123449 70%, #0a2233 100%);
+      border: 2px solid #444;
+      border-radius: 10px;
+      overflow: hidden;
+      isolation: isolate;
+      container-type: size;
+      container-name: ui;
+    }
+    #stage-label {
+      position: absolute; top: 8px; left: 0; right: 0; text-align: center;
+      color: rgba(255,255,255,0.3); font-size: 11px; pointer-events: none; z-index: 1;
+    }
+  </style>
+</head>
+<body>
+  <div id="lang-toggle">
+    <button data-lang="de" class="active">DE</button>
+    <button data-lang="en">EN</button>
+  </div>
+
+  <h1>Screens</h1>
+  <p class="sub">Every menu screen (Fischdex, Shop, Aufträge, Einstellungen, Erfolge), the catch card, the level-up popup, and the toast queue — with plausible sample data, over a static image-free background. Uses the real <code>src/ui/ui.css</code> and <code>src/ui/screens.ts</code>/<code>sheet.ts</code>/<code>catchCard.ts</code>/<code>toast.ts</code>.</p>
+
+  <div id="controls"></div>
+
+  <div id="stage">
+    <div id="stage-label">390×844 reference frame — world stand-in</div>
+  </div>
+
+  <script type="module" src="/dev/screensDev.ts"></script>
+</body>
+</html>

@@ -99,6 +99,7 @@ export async function startGame(): Promise<void> {
       hookY: st.hookY,
       tension: st.reel?.tension ?? 0,
       fighting: st.phase === 'reeling' || st.phase === 'biting',
+      lureRadius: session.view().lureRadius,
       light: sky.light,
     });
 
@@ -154,7 +155,10 @@ export async function startGame(): Promise<void> {
   window.visualViewport?.addEventListener('resize', onResize);
 
   (window as unknown as { __game: unknown }).__game = {
-    scene, shoal, session, tackle, hud, baker, standalone,
+    scene, shoal, session, tackle, hud, baker, standalone, engine,
+    /** dev only: freeze the simulation while still rendering, so a still
+     *  frame can be captured of a state that only lasts a moment. */
+    freeze: (on: boolean) => { engine.app.ticker.speed = on ? 0 : 1; },
     report: () => `${scene.report()}  ${baker.report()}  scn ${standalone.report().mb}MB  ${layout.W}x${layout.H}@${layout.dpr}  ${session.state.phase}`,
   };
 }

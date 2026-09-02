@@ -35,6 +35,15 @@ export interface TackleState {
   tension: number;
   /** true while a fish is on and the line should twitch */
   fighting: boolean;
+  /**
+   * The rod's lure radius in logical px, or 0 to hide it.
+   *
+   * Rods differ mainly by this number and by their drill zone, and the old
+   * game showed neither — the player bought a stat they could not perceive,
+   * and so could not tell that the new rod was better. Drawing it is three
+   * lines and it makes every rod upgrade legible.
+   */
+  lureRadius: number;
   light: number;
 }
 
@@ -48,6 +57,7 @@ function bobberItem(id: string) {
 export class Tackle {
   readonly root = new Container();
   private line = new Graphics();
+  private lure = new Graphics();
   private bobber = new Sprite();
   private hook = new Sprite();
   private lightStep = -1;
@@ -55,7 +65,7 @@ export class Tackle {
 
   constructor(private scene: Scene, bobberSkin = 'standard') {
     this.bobberSkin = bobberSkin;
-    this.root.addChild(this.line, this.hook, this.bobber);
+    this.root.addChild(this.lure, this.line, this.hook, this.bobber);
     scene.tackleLayer.addChild(this.root);
     this.bobber.anchor.set(0.5);
     this.hook.anchor.set(0.5, 0);
@@ -104,6 +114,19 @@ export class Tackle {
     this.hook.y = s.hookY;
     this.hook.visible = s.hookY > by + 6;
 
+    // --- the lure radius, flattened for the water's perspective ---
+    const lg = this.lure;
+    lg.clear();
+    if (s.lureRadius > 0) {
+      // Two rings, the outer one breathing, so it reads as an area of
+      // influence rather than as a target reticle.
+      const pulse = 0.9 + Math.sin(t * 1.6) * 0.1;
+      lg.ellipse(bx, by + 4, s.lureRadius * pulse, s.lureRadius * 0.34 * pulse);
+      lg.stroke({ width: 1.4, color: 0xcdefff, alpha: 0.3 });
+      lg.ellipse(bx, by + 4, s.lureRadius * 0.55, s.lureRadius * 0.19);
+      lg.stroke({ width: 1, color: 0xcdefff, alpha: 0.18 });
+    }
+
     // --- the line: rod tip to bobber, sagging, then bobber to hook ---
     const g = this.line;
     g.clear();
@@ -120,7 +143,7 @@ export class Tackle {
         + (s.fighting ? Math.sin(u * 9 + t * 26) * s.tension * 1.6 : 0);
       g.lineTo(x, y);
     }
-    g.stroke({ width: 1, color: 0xffffff, alpha: 0.5 });
+    g.stroke({ width: 1.2, color: 0xffffff, alpha: 0.62 });
 
     if (this.hook.visible) {
       g.moveTo(bx, by);

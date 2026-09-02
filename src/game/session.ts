@@ -55,6 +55,8 @@ export interface SessionView {
   /** 0..1 of the bite window remaining, only while biting */
   biteLeft: number;
   hookedName: string | null;
+  /** logical px, 0 when the line is not out */
+  lureRadius: number;
 }
 
 export interface SessionCallbacks {
@@ -86,6 +88,19 @@ function toLogicSpecies(sp: Species): FishSpecies {
   };
 }
 
+/** seconds between two bait twitches */
+const TWITCH_COOLDOWN = 0.8;
+/** how long a twitch keeps drawing attention */
+const TWITCH_BOOST_TIME = 2.2;
+/** attraction multiplier while a twitch is working */
+const TWITCH_MULT = 1.8;
+/** landing the hook this close to a fish scares it off */
+const CAST_SCARE_RADIUS = 26;
+/** landing it this close, but not on top, is rewarded */
+const CAST_BONUS_RADIUS = 78;
+/** the reward, as a fraction added to the attraction rate */
+const CAST_BONUS_MULT = 0.75;
+
 let nextFishId = 1;
 
 export class Session {
@@ -100,6 +115,10 @@ export class Session {
   private hookedShiny = false;
   /** seconds until the next bite roll; the pure bite module decides the rate */
   private nextBiteRoll = 0;
+  private twitchCooldown = 0;
+  private twitchBoost = 0;
+  /** attraction bonus earned by landing the cast beside a visible fish */
+  private castBonus = 0;
   private reelClickAcc = 0;
   private lastResult: CatchResult | null = null;
 
@@ -128,9 +147,7 @@ export class Session {
         this.cast(x, y);
         break;
       case 'waiting':
-        // A second tap into the water reels the line back in.
-        this.state = transition(s, { type: 'RETRIEVE_TAP' });
-        sfx.cast(panFor(s.bobberX / layout.W));
+        this.tapWhileWaiting(x, y);
         break;
       case 'biting':
         this.strike();
@@ -158,6 +175,23 @@ export class Session {
   }
 
   private cast(targetX: number, targetY: number): void {
+    // Casting ON a fish scares it — that detail was already in the old game
+    // ("nah dran, nicht drauf"), and it is half a mechanic. This is the other
+    // half: landing just BESIDE a visible fish is rewarded, which turns the
+    // shoal from wallpaper into something to aim at.
+    const onTop = this.shoal.nearest(targetX, targetY, CAST_SCARE_RADIUS);
+    if (onTop) {
+      onTop.attracted = false;
+      onTop.turnTo = onTop.x < targetX ? -1 : 1;
+      if (onTop.dir !== onTop.turnTo) { onTop.turn = 0.0001; }
+      onTop.speed *= 2.2;
+      this.cb.onToast?.('Nah dran, nicht drauf!');
+      this.castBonus = 0;
+    } else {
+      const beside = this.shoal.nearest(targetX, targetY, CAST_BONUS_RADIUS);
+      this.castBonus = beside ? CAST_BONUS_MULT : 0;
+    }
+
     const tip = this.rodTip;
     const anim = castTo(tip.x, tip.y, targetX, targetY, {
       horizonY: this.scene.horizonY,
@@ -167,6 +201,37 @@ export class Session {
     this.state = transition(this.state, { type: 'CAST', anim });
     sfx.cast(panFor(targetX / layout.W));
     this.nextBiteRoll = 0;
+  }
+
+  /**
+   * A tap while the line is out.
+   *
+   * Near the bobber it TWITCHES the bait; anywhere else it reels in. The
+   * twitch is new: waiting was dead time, with nothing the player could do
+   * but watch, and the nibble tell was the only feedback. Now a twitch draws
+   * attention — a short attraction bonus, a couple of bubbles, and every
+   * interested fish turns toward it. It costs a cooldown so it cannot be
+   * mashed.
+   */
+  private tapWhileWaiting(x: number, y: number): void {
+    const s = this.state;
+    const near = Math.hypot(x - s.bobberX, y - s.bobberY) < 70;
+    if (near && this.twitchCooldown <= 0) {
+      this.twitchCooldown = TWITCH_COOLDOWN;
+      this.twitchBoost = TWITCH_BOOST_TIME;
+      sfx.plop(panFor(s.bobberX / layout.W));
+      this.scene.particles.bubbles(s.bobberX, s.hookY, 3);
+      this.scene.particles.ripple(s.bobberX, s.bobberY, 18, 1);
+      for (const f of this.shoal.fish) {
+        if (f.distant) continue;
+        const want = s.bobberX >= f.x ? 1 : -1;
+        if (f.dir !== want && f.turn === 0) { f.turn = 0.0001; f.turnTo = want; }
+      }
+      return;
+    }
+    this.state = transition(s, { type: 'RETRIEVE_TAP' });
+    this.shoal.clearInterest();
+    sfx.cast(panFor(s.bobberX / layout.W));
   }
 
   private strike(): void {
@@ -260,8 +325,14 @@ export class Session {
     s.bobberY = getWave(s.bobberX, s.time, this.scene.horizonY);
     s.hookY += (s.hookTargetY - s.hookY) * Math.min(1, dt * 2.5);
 
+    this.twitchCooldown = Math.max(0, this.twitchCooldown - dt);
+    this.twitchBoost = Math.max(0, this.twitchBoost - dt);
+
     const rod = this.currentRod();
     const radius = attractRadius(layout.W, layout.H, rod.radius, 0, false);
+    // The two new bonuses multiply the ported rate rather than replacing it,
+    // so every original multiplier still applies underneath.
+    const bonus = (1 + this.castBonus) * (this.twitchBoost > 0 ? TWITCH_MULT : 1);
 
     // Already-interested fish keep swimming in; the rest may become
     // interested, at a rate that depends on what they are.
@@ -284,7 +355,7 @@ export class Session {
           isBoss: !!f.sp.boss,
           rarityIdx: rarityIndex(f.sp),
         });
-        if (!rollAttracted(rate, dt, this.rng)) continue;
+        if (!rollAttracted(rate * bonus, dt, this.rng)) continue;
         f.attracted = true;
         f.turn = 0;                    // it has made up its mind
       }
@@ -505,6 +576,9 @@ export class Session {
       progress: s.reel?.progress ?? 0,
       biteLeft: s.phase === 'biting' ? Math.max(0, s.biteTimer) / BITE_WINDOW : 0,
       hookedName: this.hookedSpecies?.nameDe ?? null,
+      lureRadius: s.phase === 'waiting'
+        ? attractRadius(layout.W, layout.H, this.currentRod().radius, 0, false)
+        : 0,
     };
   }
 
