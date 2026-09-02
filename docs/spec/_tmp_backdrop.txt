@@ -1,0 +1,896 @@
+     1	﻿// --- Kulissen: füllt den Hintergrund jedes Ortes ---
+     2	// Vorher war überall nur Farbverlauf + ein paar Pflanzen. Hier kommen Ebenen dazu:
+     3	// weit hinten (Silhouetten), mittig (Struktur), vorne (Partikel). Alles deterministisch
+     4	// (Pseudo-Zufall aus dem Index), damit nichts flackert, und mit sanfter Drift über time.
+     5	// Meeresboden: auf dem Handy über der Buttonleiste, sonst wird alles davon verdeckt
+     6	function seaFloorY() { return isNarrow() ? bottomBarY() - 58 : canvas.height - 10; }
+     7	function prnd(i, salt = 0) { const v = Math.sin(i * 12.9898 + salt * 78.233) * 43758.5453; return v - Math.floor(v); }
+     8	
+     9	function isDeepSea() { return getLocation().id === "tiefsee"; }
+    10	
+    11	// Wird direkt nach dem Farbverlauf gezeichnet (hinter allem anderen)
+    12	function drawBackdropFar() {
+    13	  const loc = getLocation();
+    14	  switch (loc.id) {
+    15	    case "see":     drawLakeShore(); break;
+    16	    case "boot":    drawOpenWater(); break;
+    17	    case "kueste":  drawCliffs(); break;
+    18	    case "riff":    drawPalmIsland(); break;
+    19	    case "tiefsee": drawDeepFar(); break;
+    20	    case "arktis":  drawIcebergs(); break;
+    21	  }
+    22	}
+    23	
+    24	// Wird zwischen Kulisse und Fischen gezeichnet (Unterwasser-Struktur).
+    25	// Jeder Ort bekommt einen Grund, sonst wachsen Pflanzen aus dem Nichts.
+    26	function drawBackdropNear() {
+    27	  const loc = getLocation();
+    28	  switch (loc.id) {
+    29	    case "see":     drawLilyPads(); drawLakeRocks(); break;
+    30	    case "boot":    drawSeaBed("rgba(38,62,66,0.85)", "rgba(14,28,36,0.95)"); drawBedStones(6, "70,88,92");
+    31	                    drawDriftParticles("rgba(190,225,245,0.35)", 26); break;
+    32	    case "kueste":  drawSeaBed("rgba(96,96,86,0.85)", "rgba(34,40,44,0.95)"); drawSeaRocks();
+    33	                    drawDriftParticles("rgba(200,230,245,0.3)", 20); break;
+    34	    case "riff":    drawSeaBed("rgba(214,196,150,0.9)", "rgba(120,110,84,0.95)"); drawAnemones(); break;
+    35	    case "tiefsee": drawSeaBed("rgba(16,26,38,0.9)", "rgba(2,6,12,0.98)"); drawDeepNear(); break;
+    36	    case "arktis":  drawSeaBed("rgba(58,78,90,0.85)", "rgba(16,30,40,0.95)"); drawBedStones(5, "96,116,128");
+    37	                    drawIceUnderside(); drawDriftParticles("rgba(225,245,255,0.4)", 30); break;
+    38	  }
+    39	}
+    40	
+    41	// Steine, die auf der Bodenkante aufliegen (gemeinsame Form für mehrere Orte)
+    42	function drawBedStones(n, rgb) {
+    43	  const floor = seaFloorY();
+    44	  for (let i = 0; i < n; i++) {
+    45	    const x = prnd(i, 96) * canvas.width;
+    46	    const r = 9 + prnd(i, 97) * 18;
+    47	    const base = floor - 2 + Math.sin(i * 0.9 + 1.3) * 5 + prnd(i, 91) * 7;
+    48	    const g = ctx.createLinearGradient(x - r, base - r * 0.7, x + r, base);
+    49	    g.addColorStop(0, `rgba(${rgb},0.7)`);
+    50	    g.addColorStop(1, `rgba(${rgb},0.35)`);
+    51	    ctx.fillStyle = g;
+    52	    ctx.beginPath(); ctx.ellipse(x, base, r, r * 0.6, prnd(i, 98) * 0.4 - 0.2, Math.PI, 0); ctx.fill();
+    53	  }
+    54	}
+    55	
+    56	// ===================== Tiefsee =====================
+    57	// Kein Himmel, keine Oberfläche: Schluchten, Leuchtkorallen, Plankton, Schwarze Raucher.
+    58	function drawDeepFar() {
+    59	  // Bewegt sind nur die vier Leuchtschwaden, und die liegen vor den Waenden.
+    60	  Blech.zweiteilig("fern:tiefsee", kulissenSig(),
+    61	                   0, canvas.height * 0.45, canvas.width, canvas.height * 0.6, _deepFar);
+    62	}
+    63	
+    64	function _deepFar() {
+    65	  const h = canvas.height, w = canvas.width;
+    66	  if (Blech.ruhig()) {
+    67	  // Ferne Schluchtwände als Silhouetten
+    68	  for (let layer = 0; layer < 2; layer++) {
+    69	    const base = h * (0.55 + layer * 0.18);
+    70	    ctx.fillStyle = layer === 0 ? "rgba(8,18,32,0.75)" : "rgba(4,10,20,0.9)";
+    71	    ctx.beginPath();
+    72	    ctx.moveTo(0, h);
+    73	    ctx.lineTo(0, base);
+    74	    for (let i = 0; i <= 10; i++) {
+    75	      const x = (i / 10) * w;
+    76	      const y = base - prnd(i, layer) * h * 0.16 - Math.sin(i * 1.7 + layer) * h * 0.03;
+    77	      ctx.lineTo(x, y);
+    78	    }
+    79	    ctx.lineTo(w, h);
+    80	    ctx.closePath(); ctx.fill();
+    81	  }
+    82	  }   // Ende des unbewegten Grundrisses
+    83	
+    84	  if (!Blech.bewegt()) return;
+    85	  // Ferne Leuchtschwaden (biolumineszente Wolken) — sie treiben, also live
+    86	  for (let i = 0; i < 4; i++) {
+    87	    const x = (prnd(i, 3) * 1.2 - 0.1) * w;
+    88	    const y = h * (0.25 + prnd(i, 4) * 0.5) + Math.sin(time * 0.15 + i) * 14;
+    89	    const r = h * (0.10 + prnd(i, 5) * 0.09);
+    90	    const col = ["120,220,255", "140,255,200", "170,150,255"][i % 3];
+    91	    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    92	    g.addColorStop(0, `rgba(${col},${0.07 + 0.03 * Math.sin(time * 0.5 + i)})`);
+    93	    g.addColorStop(1, `rgba(${col},0)`);
+    94	    ctx.fillStyle = g;
+    95	    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    96	  }
+    97	}
+    98	
+    99	// Die Zweige und Knospen EINER Leuchtkoralle, um (cx, cyBoden) — dieselbe
+   100	// Form fuer den scharfen Live-Lauf und fuer den gebackenen Halo (Runde 9).
+   101	// Farben/Strichbreite setzt der Aufrufer.
+   102	function _koralleZweige(cx, cy, sway, hgt, budR) {
+   103	  ctx.beginPath();
+   104	  ctx.moveTo(cx, cy);
+   105	  ctx.quadraticCurveTo(cx + sway, cy - hgt * 0.6, cx + sway * 1.6, cy - hgt);
+   106	  ctx.moveTo(cx, cy - hgt * 0.35);
+   107	  ctx.quadraticCurveTo(cx - 12 + sway, cy - hgt * 0.6, cx - 16 + sway, cy - hgt * 0.85);
+   108	  ctx.moveTo(cx, cy - hgt * 0.5);
+   109	  ctx.quadraticCurveTo(cx + 14 + sway, cy - hgt * 0.7, cx + 19 + sway, cy - hgt * 0.9);
+   110	  ctx.stroke();
+   111	  for (const [bx, by] of [[cx + sway * 1.6, cy - hgt], [cx - 16 + sway, cy - hgt * 0.85], [cx + 19 + sway, cy - hgt * 0.9]]) {
+   112	    ctx.beginPath(); ctx.arc(bx, by, budR, 0, Math.PI * 2); ctx.fill();
+   113	  }
+   114	}
+   115	
+   116	// Schirm und Tentakel EINER Leuchtqualle um (cx, cy) — Live-Form und
+   117	// gebackener Halo teilen sich die Zeichnung. `ph` ist die Tentakelphase.
+   118	function _qualleForm(cx, cy, r, domeR, ph) {
+   119	  ctx.beginPath(); ctx.arc(cx, cy, domeR, Math.PI, 0); ctx.fill();
+   120	  for (let t = 0; t < 5; t++) {
+   121	    const tx = cx - r * 0.7 + t * r * 0.35;
+   122	    ctx.beginPath(); ctx.moveTo(tx, cy);
+   123	    ctx.quadraticCurveTo(tx + Math.sin(ph + t) * 5, cy + r * 1.1, tx + Math.sin(ph + t) * 9, cy + r * 2);
+   124	    ctx.stroke();
+   125	  }
+   126	}
+   127	
+   128	// ============ Der Halo vom Blech: der Versatz-Trick (Runde 9) ============
+   129	//
+   130	// `shadowBlur` ist ein Gauss-Weichzeichner JE ZEICHENBEFEHL. In der Tiefsee
+   131	// liefen davon ~60 je Bild (11 Korallen, 3 Quallen, je Zweige + Knospen bzw.
+   132	// Schirm + 5 Tentakel) — an genau dem Bildschirm, der auf dem Geraet der
+   133	// langsamste ist, und in keiner Befehlszaehlung auffaellig, weil es wenige
+   134	// Befehle sind. Der Halo wird jetzt EINMAL gebacken und danach kopiert.
+   135	//
+   136	// Damit im Stempel NUR der Halo liegt (die scharfe Form bleibt live und
+   137	// bewegt sich weiter), wird die Form weit ausserhalb des Stempels gezeichnet
+   138	// und ihr Schatten per `shadowOffsetX` zurueck an die richtige Stelle
+   139	// geholt. shadowOffset und shadowBlur sind laut Spezifikation von der
+   140	// Transformation UNABHAENGIG (Geraetepixel) — deshalb ist der Versatz in
+   141	// Geraetepixeln fest und der Zeichenversatz durch t.a geteilt. Ob ein
+   142	// Browser sich daran haelt, prueft der Bildvergleich, nicht der Glaube.
+   143	const HALO_VERSATZ = 2048;   // Geraetepixel; jenseits von MAX_STEMPEL = sicher draussen
+   144	function _haloAn(farbe, blur) {
+   145	  const t = ctx.getTransform();
+   146	  ctx.shadowColor = farbe; ctx.shadowBlur = blur; ctx.shadowOffsetX = HALO_VERSATZ;
+   147	  return HALO_VERSATZ / t.a;   // um so viel nach links zeichnen
+   148	}
+   149	function _haloAus() { ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; }
+   150	
+   151	function drawDeepNear() {
+   152	  const h = canvas.height, w = canvas.width;
+   153	  const floor = seaFloorY();
+   154	
+   155	  // Schwarze Raucher mit aufsteigenden Partikeln
+   156	  for (let i = 0; i < 2; i++) {
+   157	    const x = w * (0.14 + i * 0.66), bw = 16 + i * 6;
+   158	    ctx.fillStyle = "rgba(10,16,26,0.95)";
+   159	    ctx.beginPath();
+   160	    ctx.moveTo(x - bw, floor); ctx.lineTo(x - bw * 0.35, floor - h * 0.13);
+   161	    ctx.lineTo(x + bw * 0.35, floor - h * 0.13); ctx.lineTo(x + bw, floor);
+   162	    ctx.closePath(); ctx.fill();
+   163	    for (let p = 0; p < 7; p++) {
+   164	      const t = (time * 0.22 + p / 7 + i * 0.3) % 1;
+   165	      const py = floor - h * 0.13 - t * h * 0.26;
+   166	      const px = x + Math.sin(t * 6 + p) * 16 * t;
+   167	      ctx.fillStyle = `rgba(120,140,165,${0.22 * (1 - t)})`;
+   168	      ctx.beginPath(); ctx.arc(px, py, 4 + t * 12, 0, Math.PI * 2); ctx.fill();
+   169	    }
+   170	  }
+   171	
+   172	  // Leuchtkorallen am Grund
+   173	  const CORAL = ["#37e0d8", "#7b6bff", "#ff5ea8", "#5ad4ff", "#a8ff6b"];
+   174	  for (let i = 0; i < 11; i++) {
+   175	    const x = prnd(i, 11) * w;
+   176	    const col = CORAL[i % CORAL.length];
+   177	    const hgt = h * (0.05 + prnd(i, 12) * 0.07);
+   178	    const sway = Math.sin(time * 0.8 + i) * 3;
+   179	    const pulse = 0.5 + 0.5 * Math.sin(time * 1.4 + i * 1.3);
+   180	    ctx.save();
+   181	    // Lichtteich: die Koralle hellt das Wasser um sich herum wirklich auf
+   182	    // (additiv in die Szene gemalt — Brechung und Trübung wirken darauf mit)
+   183	    // Der Verlauf läuft EXPONENTIELL aus (vier Stützstellen) — mit nur
+   184	    // einer Mittelstufe stand hier eine sichtbare Lichtscheibe im Wasser,
+   185	    // Dustins "merkwürdige runde Shapes". Licht hat keine Kante.
+   186	    const rgbc = hexToRgb(col);
+   187	    const lightR = hgt * 1.9;
+   188	    const a0 = 0.09 + pulse * 0.07;
+   189	    // NICHT gestempelt, und das ist gemessen und kein Versehen (#107, R7):
+   190	    // dieser Lichtteich ist bis zu 384 CSS-Pixel breit. Als Stempel kostete
+   191	    // er allein 5,3 MB, elf davon sprengten jeden Deckel — und gespart haette
+   192	    // er nichts. Teuer an einem grossen weichen Fleck ist die FLAECHE, die
+   193	    // additiv gefuellt wird, nicht das Verlaufsobjekt davor; ein Bild derselben
+   194	    // Groesse zu kopieren kostet dieselbe Fuellrate. Gestempelt wird nur, was
+   195	    // klein und haeufig ist (das Plankton weiter unten).
+   196	    const lg = ctx.createRadialGradient(x, floor - hgt * 0.6, 0, x, floor - hgt * 0.6, lightR);
+   197	    lg.addColorStop(0, `rgba(${rgbc[0]},${rgbc[1]},${rgbc[2]},${a0})`);
+   198	    lg.addColorStop(0.3, `rgba(${rgbc[0]},${rgbc[1]},${rgbc[2]},${a0 * 0.42})`);
+   199	    lg.addColorStop(0.6, `rgba(${rgbc[0]},${rgbc[1]},${rgbc[2]},${a0 * 0.15})`);
+   200	    lg.addColorStop(0.85, `rgba(${rgbc[0]},${rgbc[1]},${rgbc[2]},${a0 * 0.04})`);
+   201	    lg.addColorStop(1, `rgba(${rgbc[0]},${rgbc[1]},${rgbc[2]},0)`);
+   202	    ctx.globalCompositeOperation = "lighter";
+   203	    ctx.fillStyle = lg;
+   204	    ctx.beginPath(); ctx.arc(x, floor - hgt * 0.6, lightR, 0, Math.PI * 2); ctx.fill();
+   205	    ctx.globalCompositeOperation = "source-over";
+   206	    // ============ Das Leuchten kommt vom Blech (Runde 9) ============
+   207	    // Vorher: `shadowBlur = 12 + pulse*10` an jedem Zweig- und Knospen-
+   208	    // Zeichenbefehl, elf Korallen, jedes Bild — 44 Gauss-Durchlaeufe je Bild.
+   209	    // Jetzt: der Halo liegt in ZWEI Stempeln je Koralle (Puls-Minimum und
+   210	    // -Maximum, exakt derselbe shadowBlur, einmal gebacken) und wird mit dem
+   211	    // Puls ueberblendet — so pulsiert auch die BREITE des Halos weiter, nicht
+   212	    // nur die Helligkeit. Der Halo steht bei sway = 0: eine Verschiebung von
+   213	    // ±3 px in einem 12-22-px-Weichzeichner ist nicht zu sehen. Die scharfen
+   214	    // Zweige und Knospen bleiben live und wiegen sich weiter.
+   215	    // Mit `Blech.an = false` laeuft exakt der alte Weg (Gegenprobe im Duell).
+   216	    const alpha = 0.55 + pulse * 0.3;
+   217	    ctx.strokeStyle = col; ctx.lineWidth = 2.5; ctx.lineCap = "round";
+   218	    ctx.fillStyle = col;
+   219	    if (Blech.an) {
+   220	      const cy0 = floor - hgt / 2;             // Stempel-Ursprung: Mitte der Koralle
+   221	      const hw = 34, hh = hgt / 2 + 14;
+   222	      const halo = (blur, budR) => () => {
+   223	        ctx.strokeStyle = col; ctx.lineWidth = 2.5; ctx.lineCap = "round"; ctx.fillStyle = col;
+   224	        const links = _haloAn(col, blur);
+   225	        _koralleZweige(-links, hgt / 2, 0, hgt, budR);
+   226	        _haloAus();
+   227	      };
+   228	      ctx.globalAlpha = alpha * (1 - pulse);
+   229	      if (ctx.globalAlpha > 0.01) Blech.stempel("tiefglow:" + i + ":a", [col, Math.round(hgt)], x, cy0, hw, hh, halo(12, 2.6));
+   230	      ctx.globalAlpha = alpha * pulse;
+   231	      if (ctx.globalAlpha > 0.01) Blech.stempel("tiefglow:" + i + ":b", [col, Math.round(hgt)], x, cy0, hw, hh, halo(22, 3.8));
+   232	      ctx.globalAlpha = alpha;
+   233	      _koralleZweige(x, floor, sway, hgt, 2.6 + pulse * 1.2);
+   234	    } else {
+   235	      ctx.shadowColor = col; ctx.shadowBlur = 12 + pulse * 10;
+   236	      ctx.globalAlpha = alpha;
+   237	      _koralleZweige(x, floor, sway, hgt, 2.6 + pulse * 1.2);
+   238	      ctx.shadowBlur = 0;
+   239	    }
+   240	    ctx.restore();
+   241	  }
+   242	
+   243	  // Biolumineszentes Plankton: driftende Leuchtpunkte, die langsam pulsieren
+   244	  ctx.save();
+   245	  for (let i = 0; i < 55; i++) {
+   246	    const sp = 0.06 + prnd(i, 21) * 0.16;
+   247	    const x = ((prnd(i, 22) * w + time * sp * 18) % (w + 40)) - 20;
+   248	    const y = prnd(i, 23) * h * 0.95 + Math.sin(time * 0.5 + i) * 9;
+   249	    const pulse = 0.35 + 0.65 * Math.pow(Math.abs(Math.sin(time * (0.5 + prnd(i, 24)) + i)), 2);
+   250	    // ============ Merksatz 13, woertlich genommen (Runde 9) ============
+   251	    // Der Radius wird EINMAL gerastert, und der gerasterte Wert gilt fuer
+   252	    // Schluessel, Signatur UND Zeichnung. Die alte Fassung fasste im
+   253	    // Schluessel unter `round(r*40)` zusammen, zeichnete aber mit dem exakten
+   254	    // `r` — zwei Punkte derselben Gruppe unterschieden sich um einen
+   255	    // Geraetepixel und warfen sich gegenseitig aus dem Cache: SECHS Neubacken
+   256	    // je Bild, die 126-ms-Frames von Runde 8. Mit rq ist die Stempelgroesse
+   257	    // je Gruppe deterministisch; der Unterschied zum exakten r liegt unter
+   258	    // 0,15 Pixel im Verlaufsradius. Helligkeit kommt ueber globalAlpha dazu
+   259	    // (beide Farbstopps sind proportional zum Puls — exakt dasselbe Bild).
+   260	    const rq = Math.round((1 + prnd(i, 25) * 2.2) * 40) / 40;
+   261	    const col = i % 7 === 0 ? "170,255,220" : i % 5 === 0 ? "180,170,255" : "150,225,255";
+   262	    ctx.globalAlpha = pulse;
+   263	    Blech.stempel("plankton:" + col + ":" + Math.round(rq * 40), [col, Math.round(rq * 40)],
+   264	                  x, y, rq * 5, rq * 5, () => {
+   265	      const g = ctx.createRadialGradient(0, 0, 0, 0, 0, rq * 5);
+   266	      g.addColorStop(0, `rgba(${col},0.75)`);
+   267	      g.addColorStop(0.35, `rgba(${col},0.25)`);
+   268	      g.addColorStop(1, `rgba(${col},0)`);
+   269	      ctx.fillStyle = g;
+   270	      ctx.beginPath(); ctx.arc(0, 0, rq * 5, 0, Math.PI * 2); ctx.fill();
+   271	    });
+   272	  }
+   273	  ctx.restore();
+   274	
+   275	  // Vereinzelte Leuchtquallen, die langsam schweben
+   276	  for (let i = 0; i < 3; i++) {
+   277	    const x = ((prnd(i, 31) * w + time * 6) % (w + 80)) - 40;
+   278	    const y = h * (0.2 + prnd(i, 32) * 0.5) + Math.sin(time * 0.7 + i * 2) * 18;
+   279	    const r = 11 + prnd(i, 33) * 7;
+   280	    const pulse = 0.5 + 0.5 * Math.sin(time * 1.6 + i);
+   281	    ctx.save();
+   282	    const qa = 0.4 + pulse * 0.25;
+   283	    ctx.fillStyle = "rgba(150,200,255,0.55)";
+   284	    ctx.strokeStyle = "rgba(180,220,255,0.5)"; ctx.lineWidth = 1.4;
+   285	    if (Blech.an) {
+   286	      // Wie bei den Korallen: der 18-px-Halo kommt vom Blech (einmal
+   287	      // gebacken, Schirm in Mittelgroesse, Tentakel in Ruhephase — in einem
+   288	      // 18-px-Weichzeichner ist beides nicht vom Live-Zustand zu
+   289	      // unterscheiden), Schirm und Tentakel selbst bleiben live und
+   290	      // schwimmen weiter. Alle Alphawerte des Motivs sind fest, die
+   291	      // Helligkeit kommt proportional ueber globalAlpha — die Bedingung
+   292	      // von `stempel()`.
+   293	      ctx.globalAlpha = qa;
+   294	      Blech.stempel("qualleglow:" + i, [Math.round(r * 4)], x, y + r * 0.5, r * 0.75 + 18, r * 1.6 + 12, () => {
+   295	        ctx.fillStyle = "rgba(150,200,255,0.55)";
+   296	        ctx.strokeStyle = "rgba(180,220,255,0.5)"; ctx.lineWidth = 1.4;
+   297	        const links = _haloAn("#8fd3ff", 18);
+   298	        _qualleForm(-links, -r * 0.5, r, r * 0.96, 0);
+   299	        _haloAus();
+   300	      });
+   301	      _qualleForm(x, y, r, r * (0.9 + pulse * 0.12), time * 2);
+   302	    } else {
+   303	      // Der alte Weg, unveraendert — die Gegenprobe des Pruefstands.
+   304	      ctx.globalAlpha = qa;
+   305	      ctx.shadowColor = "#8fd3ff"; ctx.shadowBlur = 18;
+   306	      _qualleForm(x, y, r, r * (0.9 + pulse * 0.12), time * 2);
+   307	      ctx.shadowBlur = 0;
+   308	    }
+   309	    ctx.restore();
+   310	  }
+   311	}
+   312	
+   313	// ===================== See =====================
+   314	// Ein Nadelbaum mit Etagen, Sonnen- und Schattenseite (wie bei den Fischen: Verlauf statt Flachfarbe)
+   315	function drawPine(x, baseY, hgt, tint) {
+   316	  const trunkW = Math.max(1.5, hgt * 0.05);
+   317	  ctx.fillStyle = "#3b2a1a";
+   318	  ctx.fillRect(x - trunkW / 2, baseY - hgt * 0.14, trunkW, hgt * 0.16);
+   319	  const tiers = 3;
+   320	  for (let i = tiers - 1; i >= 0; i--) {
+   321	    const t = i / tiers;
+   322	    const cy = baseY - hgt * (0.12 + t * 0.58);       // Unterkante dieser Etage
+   323	    const tw = hgt * 0.30 * (1 - t * 0.42);
+   324	    const th = hgt * 0.40;
+   325	    const g = ctx.createLinearGradient(x - tw, cy - th, x + tw, cy);
+   326	    g.addColorStop(0, shadeColor(tint, 0.30));         // Sonnenseite links
+   327	    g.addColorStop(0.45, tint);
+   328	    g.addColorStop(1, shadeColor(tint, -0.35));        // Schattenseite rechts
+   329	    ctx.fillStyle = g;
+   330	    ctx.beginPath();
+   331	    ctx.moveTo(x, cy - th);
+   332	    // gezackte Unterkante statt glattem Dreieck
+   333	    ctx.lineTo(x - tw * 0.55, cy - th * 0.35);
+   334	    ctx.lineTo(x - tw * 0.42, cy - th * 0.42);
+   335	    ctx.lineTo(x - tw, cy);
+   336	    ctx.lineTo(x - tw * 0.5, cy - th * 0.08);
+   337	    ctx.lineTo(x, cy + th * 0.03);
+   338	    ctx.lineTo(x + tw * 0.5, cy - th * 0.08);
+   339	    ctx.lineTo(x + tw, cy);
+   340	    ctx.lineTo(x + tw * 0.42, cy - th * 0.42);
+   341	    ctx.lineTo(x + tw * 0.55, cy - th * 0.35);
+   342	    ctx.closePath(); ctx.fill();
+   343	  }
+   344	}
+   345	
+   346	// ===================== Kulissen aufs Blech (#107, Runde 7) ==================
+   347	//
+   348	// Die Kulissen sind der groesste unbewegte Posten der Szene: `drawLakeShore`
+   349	// allein sind 1420 Zeichenbefehle am Startort, und zwischen zwei Bildern
+   350	// aendert sich daran nichts ausser dem Wind in Gras und Schilf. Also einmal
+   351	// backen, danach kopieren (blech.js).
+   352	//
+   353	// WAS SICH DOCH AENDERT, UND WIE ES IN DIE SIGNATUR KOMMT
+   354	//
+   355	// Die Kulissen dimmen mit dem Tageslicht (`getPalette(dayTime).light`), und
+   356	// `dayTime` laeuft stufenlos: 300 Sekunden je Spieltag. Eine Signatur mit dem
+   357	// echten Licht darin waere jedes Bild eine andere und der Cache damit das
+   358	// Gegenteil eines Caches.
+   359	//
+   360	// Deshalb wird das Licht GERASTERT — und zwar nicht nur in der Signatur,
+   361	// sondern auch beim Zeichnen. Wuerde nur die Signatur rastern, haetten die
+   362	// gebackenen Berge ein anderes Licht als das live gezeichnete Gras davor, und
+   363	// genau an dieser Kante saehe man den Cache.
+   364	//
+   365	// 64 Stufen ueber den ganzen Bereich. Ein Schritt aendert die Abdunklung um
+   366	// 0,55/64 = 0,9 % — unter der Schwelle, ab der man einen Sprung als Sprung
+   367	// erkennt, und das auf einer texturierten Kulisse. Dafuer wird die Kulisse
+   368	// nur noch rund alle zwei Sekunden neu gebacken statt sechzigmal je Sekunde.
+   369	//
+   370	// WAS EIN NEUBACKEN KOSTET, EHRLICH: genau das, was heute JEDES Bild kostet —
+   371	// die 1420 Befehle plus einen Durchlauf. Ein Bild von etwa 120 zahlt also den
+   372	// alten Preis, die anderen 119 zahlen ein `drawImage`. Bei 1/120 der Bilder
+   373	// liegt das noch nicht einmal im p95.
+   374	const KULISSE_STUFEN = 64;
+   375	function kulissenStufe() {
+   376	  const l = (typeof getPalette === "function") ? getPalette(dayTime).light : 1;
+   377	  return Math.round(clamp(l, 0, 1) * KULISSE_STUFEN);
+   378	}
+   379	// Das gerasterte Tageslicht. IMMER dieses benutzen, nie `getPalette().light`
+   380	// direkt — sonst laufen gebackene und live gezeichnete Teile auseinander.
+   381	function kulissenLicht(min) { return clamp(kulissenStufe() / KULISSE_STUFEN, min == null ? 0 : min, 1); }
+   382	
+   383	// Die Signatur, die fast jede Kulisse braucht: Ort, gerastertes Licht,
+   384	// Bildgroesse, Horizont. Die Pixelgroesse haengt Blech selbst an.
+   385	function kulissenSig(extra) {
+   386	  return [getLocation().id, kulissenStufe(), canvas.width | 0, Math.round(horizonY), extra == null ? 0 : extra].join(",");
+   387	}
+   388	
+   389	function drawLakeShore() {
+   390	  // Bewegt sind nur Gras (60 Halme) und Schilf (12 Rohre), und beide liegen
+   391	  // in der Zeichenreihenfolge ganz oben — die Bedingung fuer `zweiteilig`.
+   392	  Blech.zweiteilig("fern:see", kulissenSig(),
+   393	                   0, horizonY - 150, canvas.width, 175, _lakeShore);
+   394	}
+   395	
+   396	function _lakeShore() {
+   397	  const hy = horizonY, w = canvas.width;
+   398	  const lf = clamp(kulissenLicht(), 0.18, 1);   // Tageslicht dimmt die Kulisse
+   399	  const dim = c => shadeColor(c, -(1 - lf) * 0.55);
+   400	  const shore = hy - 6;
+   401	  if (Blech.ruhig()) {
+   402	
+   403	  // 1) Ferne Bergkette: Verlauf, Schneekappen, Dunst davor
+   404	  const mTop = shore - 118, mG = ctx.createLinearGradient(0, mTop, 0, shore);
+   405	  mG.addColorStop(0, dim("#7c93a6")); mG.addColorStop(1, dim("#4c6274"));
+   406	  ctx.fillStyle = mG;
+   407	  ctx.beginPath(); ctx.moveTo(0, shore);
+   408	  const peaks = [];
+   409	  for (let i = 0; i <= 7; i++) {
+   410	    const px = (i / 7) * w;
+   411	    const py = shore - 46 - prnd(i, 1) * 66;
+   412	    peaks.push([px, py]);
+   413	    if (i === 0) ctx.lineTo(px, py);
+   414	    else {
+   415	      const [ppx, ppy] = peaks[i - 1];
+   416	      ctx.lineTo((ppx + px) / 2, Math.max(ppy, py) + 14);  // Sattel zwischen zwei Gipfeln
+   417	      ctx.lineTo(px, py);
+   418	    }
+   419	  }
+   420	  ctx.lineTo(w, shore); ctx.closePath(); ctx.fill();
+   421	  // Schneekappen auf den höchsten Gipfeln
+   422	  ctx.fillStyle = `rgba(244,250,255,${0.55 * lf + 0.2})`;
+   423	  for (const [px, py] of peaks) {
+   424	    if (py > shore - 78) continue;
+   425	    ctx.beginPath();
+   426	    ctx.moveTo(px, py); ctx.lineTo(px - 13, py + 17);
+   427	    ctx.lineTo(px - 5, py + 12); ctx.lineTo(px + 3, py + 18); ctx.lineTo(px + 11, py + 12); ctx.lineTo(px + 15, py + 17);
+   428	    ctx.closePath(); ctx.fill();
+   429	  }
+   430	  // Luftdunst vor den Bergen (Tiefenwirkung)
+   431	  const haze = ctx.createLinearGradient(0, shore - 70, 0, shore);
+   432	  haze.addColorStop(0, "rgba(180,205,225,0)");
+   433	  haze.addColorStop(1, `rgba(180,205,225,${0.32 * lf})`);
+   434	  ctx.fillStyle = haze; ctx.fillRect(0, shore - 70, w, 70);
+   435	
+   436	  // 2) Bewaldeter Hügelzug dahinter (dunkler, unscharfe Kante aus vielen kleinen Spitzen)
+   437	  ctx.fillStyle = dim("#2f5a44");
+   438	  ctx.beginPath(); ctx.moveTo(0, shore);
+   439	  for (let i = 0; i <= 26; i++) {
+   440	    const px = (i / 26) * w;
+   441	    const base = shore - 26 - Math.sin(i * 0.42) * 12 - prnd(i, 2) * 10;
+   442	    ctx.lineTo(px, base);
+   443	    ctx.lineTo(px + w / 52, base + 6);
+   444	  }
+   445	  ctx.lineTo(w, shore); ctx.closePath(); ctx.fill();
+   446	
+   447	  // 3) Nadelwald am Ufer: hinten klein und blass, vorne groß und kräftig
+   448	  for (const layer of [{ n: 12, s: 0.55, tint: "#2b5240", a: 0.75, yo: 4 }, { n: 8, s: 1, tint: "#37694f", a: 1, yo: 0 }]) {
+   449	    ctx.globalAlpha = layer.a;
+   450	    for (let i = 0; i < layer.n; i++) {
+   451	      const x = prnd(i, layer.s * 10 + 3) * w * 0.62;
+   452	      const hgt = (30 + prnd(i, layer.s * 10 + 4) * 34) * layer.s;
+   453	      drawPine(x, shore + layer.yo, hgt, dim(layer.tint));
+   454	    }
+   455	    ctx.globalAlpha = 1;
+   456	  }
+   457	
+   458	  // 4) Uferkante: Gras auf Erde, weiche Oberkante
+   459	  const bankG = ctx.createLinearGradient(0, shore - 5, 0, shore + 7);
+   460	  bankG.addColorStop(0, dim("#5c7a4a")); bankG.addColorStop(0.5, dim("#40573a")); bankG.addColorStop(1, dim("#2f4030"));
+   461	  ctx.fillStyle = bankG; ctx.fillRect(0, shore - 5, w, 12);
+   462	  }   // Ende des unbewegten Grundrisses
+   463	
+   464	  if (!Blech.bewegt()) return;
+   465	  // --- Ab hier steht der Wind: jedes Bild neu, live über die gebackene Kulisse
+   466	  ctx.strokeStyle = dim("#6f8f56"); ctx.lineWidth = 1;
+   467	  for (let i = 0; i < 60; i++) {   // Grasbüschel auf der Kante
+   468	    const gx = prnd(i, 7) * w, gh = 3 + prnd(i, 8) * 5, sway = Math.sin(time * 1.4 + i) * 1.2;
+   469	    ctx.beginPath(); ctx.moveTo(gx, shore - 3); ctx.lineTo(gx + sway, shore - 3 - gh); ctx.stroke();
+   470	  }
+   471	
+   472	  // 5) Rohrkolben-Schilf am linken Ufer
+   473	  for (let i = 0; i < 12; i++) {
+   474	    const x = w * 0.01 + prnd(i, 9) * w * 0.22;
+   475	    const rh = 20 + prnd(i, 10) * 26, sway = Math.sin(time * 1.1 + i) * 3;
+   476	    ctx.strokeStyle = dim("#7d9a4a"); ctx.lineWidth = 1.8; ctx.lineCap = "round";
+   477	    ctx.beginPath(); ctx.moveTo(x, shore + 3);
+   478	    ctx.quadraticCurveTo(x + sway, shore - rh * 0.6, x + sway * 2, shore - rh); ctx.stroke();
+   479	    if (i % 3 === 0) {   // Kolben
+   480	      ctx.fillStyle = dim("#6b4a2a");
+   481	      ctx.beginPath(); ctx.ellipse(x + sway * 2, shore - rh + 3, 2.2, 6, 0, 0, Math.PI * 2); ctx.fill();
+   482	    }
+   483	  }
+   484	}
+   485	
+   486	function drawLilyPads() {
+   487	  const hy = horizonY;
+   488	  for (let i = 0; i < 5; i++) {
+   489	    const x = prnd(i, 6) * canvas.width;
+   490	    const y = hy + 16 + prnd(i, 7) * 26 + Math.sin(time * 0.9 + i) * 2;
+   491	    const r = 12 + prnd(i, 8) * 12;
+   492	    ctx.fillStyle = "rgba(46,96,58,0.55)";
+   493	    ctx.beginPath(); ctx.ellipse(x, y, r, r * 0.34, 0, 0, Math.PI * 2); ctx.fill();
+   494	    ctx.fillStyle = "rgba(20,50,30,0.5)";
+   495	    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + r * 0.75, y - r * 0.16); ctx.lineTo(x + r * 0.75, y + r * 0.16); ctx.closePath(); ctx.fill();
+   496	  }
+   497	}
+   498	
+   499	// Sedimentboden mit welliger Oberkante – darauf liegen Steine und Pflanzen auf,
+   500	// vorher schwebten die Steine im Nichts, weil es gar keinen Boden gab.
+   501	function drawSeaBed(topCol, botCol) {
+   502	  const floor = seaFloorY(), bot = canvas.height, w = canvas.width;
+   503	  ctx.save();
+   504	  ctx.beginPath();
+   505	  ctx.moveTo(0, bot);
+   506	  ctx.lineTo(0, floor + Math.sin(time * 0.2) * 2);
+   507	  for (let i = 0; i <= 16; i++) {
+   508	    const x = (i / 16) * w;
+   509	    const y = floor - 4 + Math.sin(i * 0.9 + 1.3) * 5 + prnd(i, 91) * 7;
+   510	    ctx.lineTo(x, y);
+   511	  }
+   512	  ctx.lineTo(w, bot); ctx.closePath();
+   513	  const g = ctx.createLinearGradient(0, floor - 10, 0, bot);
+   514	  g.addColorStop(0, topCol); g.addColorStop(0.45, topCol); g.addColorStop(1, botCol);
+   515	  ctx.fillStyle = g; ctx.fill();
+   516	  // weicher Schleier über der Kante, damit der Boden nicht als Balken absetzt
+   517	  const veil = ctx.createLinearGradient(0, floor - 46, 0, floor + 10);
+   518	  veil.addColorStop(0, topCol.replace(/[\d.]+\)$/, "0)"));
+   519	  veil.addColorStop(1, topCol.replace(/[\d.]+\)$/, "0.55)"));
+   520	  ctx.fillStyle = veil; ctx.fillRect(0, floor - 46, w, 56);
+   521	  ctx.restore();
+   522	  return floor;
+   523	}
+   524	
+   525	function drawLakeRocks() {
+   526	  const floor = drawSeaBed("rgba(52,66,58,0.85)", "rgba(22,34,34,0.95)");
+   527	  // Steine sitzen auf der Bodenkante auf, mit Auflagepunkt statt frei schwebend
+   528	  for (let i = 0; i < 9; i++) {
+   529	    const x = prnd(i, 9) * canvas.width;
+   530	    const r = 8 + prnd(i, 10) * 20;
+   531	    const base = floor - 2 + Math.sin(i * 0.9 + 1.3) * 5 + prnd(i, 91) * 7;
+   532	    const g = ctx.createLinearGradient(x - r, base - r * 0.7, x + r, base);
+   533	    g.addColorStop(0, "rgba(96,108,102,0.75)");
+   534	    g.addColorStop(0.55, "rgba(62,74,70,0.75)");
+   535	    g.addColorStop(1, "rgba(34,44,42,0.8)");
+   536	    ctx.fillStyle = g;
+   537	    ctx.beginPath(); ctx.ellipse(x, base, r, r * 0.62, prnd(i, 12) * 0.5 - 0.25, Math.PI, 0); ctx.fill();
+   538	    // Glanzkante oben
+   539	    ctx.strokeStyle = "rgba(160,180,175,0.25)"; ctx.lineWidth = 1;
+   540	    ctx.beginPath(); ctx.ellipse(x, base, r * 0.75, r * 0.45, 0, Math.PI * 1.15, Math.PI * 1.75); ctx.stroke();
+   541	  }
+   542	}
+   543	
+   544	// ===================== Boot / offenes Wasser =====================
+   545	function drawOpenWater() {
+   546	  // Bewegt sind nur die drei Segelboote, und die stehen ganz oben in der
+   547	  // Zeichenreihenfolge — die Bedingung fuer `zweiteilig`.
+   548	  Blech.zweiteilig("fern:boot", kulissenSig(),
+   549	                   0, horizonY - 70, canvas.width, 90, _openWater);
+   550	}
+   551	
+   552	function _openWater() {
+   553	  const hy = horizonY, w = canvas.width;
+   554	  const lf = clamp(kulissenLicht(), 0.18, 1);
+   555	  const dim = c => shadeColor(c, -(1 - lf) * 0.55);
+   556	  if (Blech.ruhig()) {
+   557	
+   558	  // Ferne Bergkette am gegenüberliegenden Ufer, stark im Dunst
+   559	  ctx.fillStyle = `rgba(126,148,168,${0.3 * lf + 0.1})`;
+   560	  ctx.beginPath(); ctx.moveTo(0, hy);
+   561	  for (let i = 0; i <= 9; i++) {
+   562	    const px = (i / 9) * w;
+   563	    ctx.lineTo(px, hy - 18 - prnd(i, 21) * 30);
+   564	  }
+   565	  ctx.lineTo(w, hy); ctx.closePath(); ctx.fill();
+   566	
+   567	  // Bewaldete Insel mit Felsrücken statt grauer Blase
+   568	  const ix = w * 0.17, iw = w * 0.15;
+   569	  const rockG = ctx.createLinearGradient(ix - iw, hy - 46, ix + iw, hy);
+   570	  rockG.addColorStop(0, dim("#6e7a72")); rockG.addColorStop(1, dim("#3c4a46"));
+   571	  ctx.fillStyle = rockG;
+   572	  ctx.beginPath();
+   573	  ctx.moveTo(ix - iw, hy + 1);
+   574	  ctx.lineTo(ix - iw * 0.55, hy - 26); ctx.lineTo(ix - iw * 0.15, hy - 44);
+   575	  ctx.lineTo(ix + iw * 0.25, hy - 30); ctx.lineTo(ix + iw * 0.7, hy - 36);
+   576	  ctx.lineTo(ix + iw, hy + 1);
+   577	  ctx.closePath(); ctx.fill();
+   578	  // Bäumchen auf der Insel
+   579	  for (let i = 0; i < 6; i++) {
+   580	    const tx = ix - iw * 0.6 + prnd(i, 22) * iw * 1.5;
+   581	    const ty = hy - 22 - prnd(i, 23) * 16;
+   582	    drawPine(tx, ty + 6, 16 + prnd(i, 24) * 12, dim("#2c5240"));
+   583	  }
+   584	  // Spiegelung der Insel im Wasser
+   585	  ctx.save(); ctx.globalAlpha = 0.18 * lf;
+   586	  ctx.scale(1, -1);
+   587	  ctx.fillStyle = dim("#3c4a46");
+   588	  ctx.beginPath();
+   589	  ctx.moveTo(ix - iw, -hy - 1); ctx.lineTo(ix - iw * 0.15, -hy + 34); ctx.lineTo(ix + iw, -hy - 1);
+   590	  ctx.closePath(); ctx.fill();
+   591	  ctx.restore();
+   592	  }   // Ende des unbewegten Grundrisses
+   593	
+   594	  if (!Blech.bewegt()) return;
+   595	  // Segelboote mit Rumpf — sie schaukeln, also jedes Bild live
+   596	  for (let i = 0; i < 3; i++) {
+   597	    const x = w * (0.55 + i * 0.16) + Math.sin(time * 0.1 + i * 2) * 7;
+   598	    const sc = 1 - i * 0.2, bob = Math.sin(time * 0.8 + i) * 1.4;
+   599	    ctx.fillStyle = `rgba(255,255,255,${0.7 * lf})`;
+   600	    ctx.beginPath(); ctx.moveTo(x, hy - 20 * sc + bob); ctx.lineTo(x + 8 * sc, hy - 4 * sc + bob); ctx.lineTo(x, hy - 4 * sc + bob); ctx.closePath(); ctx.fill();
+   601	    ctx.beginPath(); ctx.moveTo(x - 1.5 * sc, hy - 18 * sc + bob); ctx.lineTo(x - 7 * sc, hy - 4 * sc + bob); ctx.lineTo(x - 1.5 * sc, hy - 4 * sc + bob); ctx.closePath(); ctx.fill();
+   602	    ctx.fillStyle = `rgba(45,60,72,${0.75 * lf})`;
+   603	    ctx.beginPath();
+   604	    ctx.moveTo(x - 9 * sc, hy - 4 * sc + bob); ctx.lineTo(x + 9 * sc, hy - 4 * sc + bob);
+   605	    ctx.lineTo(x + 5 * sc, hy + bob); ctx.lineTo(x - 6 * sc, hy + bob);
+   606	    ctx.closePath(); ctx.fill();
+   607	  }
+   608	}
+   609	
+   610	// driftende Schwebeteilchen im Wasser
+   611	function drawDriftParticles(color, n) {
+   612	  const h = canvas.height, w = canvas.width;
+   613	  ctx.save(); ctx.fillStyle = color;
+   614	  for (let i = 0; i < n; i++) {
+   615	    const x = ((prnd(i, 41) * w + time * (4 + prnd(i, 42) * 10)) % (w + 20)) - 10;
+   616	    const y = horizonY + prnd(i, 43) * (h - horizonY) + Math.sin(time * 0.6 + i) * 6;
+   617	    ctx.globalAlpha = 0.3 + 0.4 * prnd(i, 44);
+   618	    ctx.beginPath(); ctx.arc(x, y, 1 + prnd(i, 45) * 1.6, 0, Math.PI * 2); ctx.fill();
+   619	  }
+   620	  ctx.restore();
+   621	}
+   622	
+   623	// ===================== Küste =====================
+   624	function drawCliffs() {
+   625	  // Bewegt sind Gischt und drei Segelboote, beide ganz oben in der
+   626	  // Zeichenreihenfolge — die Bedingung fuer `zweiteilig`.
+   627	  Blech.zweiteilig("fern:kueste", kulissenSig(),
+   628	                   0, horizonY - 125, canvas.width, 145, _cliffs);
+   629	}
+   630	
+   631	function _cliffs() {
+   632	  const hy = horizonY, w = canvas.width;
+   633	  const lf = clamp(kulissenLicht(), 0.18, 1);
+   634	  const dim = c => shadeColor(c, -(1 - lf) * 0.55);
+   635	  if (Blech.ruhig()) {
+   636	
+   637	  // Ferne Landzunge im Dunst
+   638	  ctx.fillStyle = `rgba(120,140,155,${0.35 * lf + 0.1})`;
+   639	  ctx.beginPath(); ctx.moveTo(w * 0.55, hy);
+   640	  ctx.lineTo(w * 0.66, hy - 26); ctx.lineTo(w * 0.78, hy - 16); ctx.lineTo(w * 0.92, hy - 30); ctx.lineTo(w, hy - 22); ctx.lineTo(w, hy);
+   641	  ctx.closePath(); ctx.fill();
+   642	
+   643	  // Kreidefelsen links: geschichtetes Gestein mit Sonnen- und Schattenseite
+   644	  const cliffG = ctx.createLinearGradient(0, hy - 110, w * 0.32, hy);
+   645	  cliffG.addColorStop(0, dim("#b9b2a6")); cliffG.addColorStop(0.5, dim("#8d8578")); cliffG.addColorStop(1, dim("#5d5850"));
+   646	  // Klippenumriss einmal definieren – wird auch als Maske für die Schichten benutzt
+   647	  const cliffPath = () => {
+   648	    ctx.beginPath();
+   649	    ctx.moveTo(0, hy + 8); ctx.lineTo(0, hy - 96);
+   650	    ctx.lineTo(w * 0.07, hy - 112); ctx.lineTo(w * 0.13, hy - 96); ctx.lineTo(w * 0.18, hy - 66);
+   651	    ctx.lineTo(w * 0.23, hy - 74); ctx.lineTo(w * 0.28, hy - 34); ctx.lineTo(w * 0.32, hy + 8);
+   652	    ctx.closePath();
+   653	  };
+   654	  ctx.fillStyle = cliffG;
+   655	  cliffPath(); ctx.fill();
+   656	  // Gesteinsschichten – auf den Fels begrenzt, sonst hängen sie in der Luft
+   657	  ctx.save();
+   658	  cliffPath(); ctx.clip();
+   659	  ctx.strokeStyle = `rgba(60,55,48,${0.28 * lf + 0.08})`; ctx.lineWidth = 1.4;
+   660	  for (let i = 1; i < 6; i++) {
+   661	    const ly = hy - 96 + i * 18;
+   662	    ctx.beginPath(); ctx.moveTo(0, ly);
+   663	    ctx.quadraticCurveTo(w * 0.14, ly - 5 + prnd(i, 61) * 6, w * 0.34, ly + 6); ctx.stroke();
+   664	  }
+   665	  ctx.restore();
+   666	  // Grasnarbe auf der Klippe
+   667	  ctx.fillStyle = dim("#4c7048");
+   668	  ctx.beginPath();
+   669	  ctx.moveTo(0, hy - 96); ctx.lineTo(w * 0.07, hy - 112); ctx.lineTo(w * 0.13, hy - 96);
+   670	  ctx.lineTo(w * 0.1, hy - 88); ctx.lineTo(w * 0.06, hy - 100); ctx.lineTo(0, hy - 86);
+   671	  ctx.closePath(); ctx.fill();
+   672	  }   // Ende des unbewegten Grundrisses
+   673	
+   674	  if (!Blech.bewegt()) return;
+   675	  // Gischt am Klippenfuß — sie schlaegt, also jedes Bild live
+   676	  ctx.fillStyle = `rgba(255,255,255,${0.25 + 0.12 * Math.sin(time * 1.8)})`;
+   677	  for (let i = 0; i < 7; i++) {
+   678	    const sx = w * (0.26 + i * 0.012) + Math.sin(time * 2 + i) * 3;
+   679	    ctx.beginPath(); ctx.ellipse(sx, hy + 3 + Math.sin(time * 3 + i) * 2, 9 - i, 4, 0, 0, Math.PI * 2); ctx.fill();
+   680	  }
+   681	
+   682	  // Segelboote am Horizont – mit Rumpf, nicht nur ein Dreieck
+   683	  for (let i = 0; i < 3; i++) {
+   684	    const x = w * (0.44 + i * 0.16) + Math.sin(time * 0.12 + i * 2) * 8;
+   685	    const sc = 1 - i * 0.18, bob = Math.sin(time * 0.9 + i) * 1.5;
+   686	    ctx.fillStyle = `rgba(255,255,255,${0.75 * lf})`;
+   687	    ctx.beginPath();
+   688	    ctx.moveTo(x, hy - 22 * sc + bob); ctx.lineTo(x + 9 * sc, hy - 5 * sc + bob); ctx.lineTo(x, hy - 5 * sc + bob);
+   689	    ctx.closePath(); ctx.fill();
+   690	    ctx.beginPath();
+   691	    ctx.moveTo(x - 1.5 * sc, hy - 20 * sc + bob); ctx.lineTo(x - 8 * sc, hy - 5 * sc + bob); ctx.lineTo(x - 1.5 * sc, hy - 5 * sc + bob);
+   692	    ctx.closePath(); ctx.fill();
+   693	    ctx.fillStyle = `rgba(40,55,70,${0.8 * lf})`;
+   694	    ctx.beginPath();
+   695	    ctx.moveTo(x - 10 * sc, hy - 5 * sc + bob); ctx.lineTo(x + 10 * sc, hy - 5 * sc + bob);
+   696	    ctx.lineTo(x + 6 * sc, hy - 1 + bob); ctx.lineTo(x - 7 * sc, hy - 1 + bob);
+   697	    ctx.closePath(); ctx.fill();
+   698	  }
+   699	}
+   700	
+   701	function drawSeaRocks() {
+   702	  const floor = seaFloorY();
+   703	  for (let i = 0; i < 6; i++) {
+   704	    const x = prnd(i, 51) * canvas.width, rw = 20 + prnd(i, 52) * 40, rh = 14 + prnd(i, 53) * 26;
+   705	    ctx.fillStyle = `rgba(46,58,64,${0.4 + prnd(i, 54) * 0.25})`;
+   706	    ctx.beginPath();
+   707	    ctx.moveTo(x - rw, floor); ctx.lineTo(x - rw * 0.5, floor - rh); ctx.lineTo(x + rw * 0.2, floor - rh * 0.7);
+   708	    ctx.lineTo(x + rw * 0.7, floor - rh * 1.1); ctx.lineTo(x + rw, floor);
+   709	    ctx.closePath(); ctx.fill();
+   710	  }
+   711	}
+   712	
+   713	// ===================== Riff =====================
+   714	function drawPalmIsland() {
+   715	  // Bewegt sind die Brandungskante und die drei Palmen (die ganze Palme
+   716	  // haengt am `sway`), beide oben in der Zeichenreihenfolge.
+   717	  Blech.zweiteilig("fern:riff", kulissenSig(),
+   718	                   0, horizonY - 30, canvas.width, 55, _palmIsland);
+   719	}
+   720	
+   721	function _palmIsland() {
+   722	  const hy = horizonY, w = canvas.width;
+   723	  const lf = clamp(kulissenLicht(), 0.2, 1);
+   724	  const dim = c => shadeColor(c, -(1 - lf) * 0.5);
+   725	  if (Blech.ruhig()) {
+   726	
+   727	  // Weitere Inseln im Dunst
+   728	  ctx.fillStyle = `rgba(150,190,185,${0.25 * lf})`;
+   729	  ctx.beginPath(); ctx.ellipse(w * 0.72, hy, w * 0.16, 13, 0, Math.PI, 0); ctx.fill();
+   730	  ctx.beginPath(); ctx.ellipse(w * 0.92, hy, w * 0.1, 9, 0, Math.PI, 0); ctx.fill();
+   731	
+   732	  // Sandbank mit Verlauf und heller Brandungskante
+   733	  const ix = w * 0.17;
+   734	  const sandG = ctx.createLinearGradient(0, hy - 20, 0, hy + 4);
+   735	  sandG.addColorStop(0, dim("#f2e2bd")); sandG.addColorStop(1, dim("#cfae7c"));
+   736	  ctx.fillStyle = sandG;
+   737	  ctx.beginPath(); ctx.ellipse(ix, hy, w * 0.15, 19, 0, Math.PI, 0); ctx.fill();
+   738	  }   // Ende des unbewegten Grundrisses
+   739	
+   740	  if (!Blech.bewegt()) return;
+   741	  const ix2 = canvas.width * 0.17;
+   742	  ctx.fillStyle = `rgba(255,255,255,${0.35 + 0.15 * Math.sin(time * 1.6)})`;
+   743	  ctx.beginPath(); ctx.ellipse(ix2, hy + 1, w * 0.155, 6, 0, Math.PI, 0); ctx.fill();
+   744	  // Palmen: gebogener Stamm mit Segmenten, herabhängende Wedel, Kokosnüsse
+   745	  for (let i = 0; i < 3; i++) {
+   746	    const x = ix2 - w * 0.07 + i * w * 0.07, th = 32 + prnd(i, 31) * 18;
+   747	    const sway = Math.sin(time * 0.8 + i) * 3.5;
+   748	    const topX = x + sway * 2, topY = hy - th;
+   749	    ctx.strokeStyle = dim("#8a6236"); ctx.lineWidth = 3.4; ctx.lineCap = "round";
+   750	    ctx.beginPath(); ctx.moveTo(x, hy); ctx.quadraticCurveTo(x + sway - 3, hy - th * 0.55, topX, topY); ctx.stroke();
+   751	    ctx.strokeStyle = dim("#6d4c28"); ctx.lineWidth = 1;
+   752	    for (let sgm = 1; sgm < 5; sgm++) {
+   753	      const t = sgm / 5, sx = lerp(x, topX, t), sy = lerp(hy, topY, t);
+   754	      ctx.beginPath(); ctx.moveTo(sx - 2, sy); ctx.lineTo(sx + 2, sy); ctx.stroke();
+   755	    }
+   756	    for (let fr = 0; fr < 6; fr++) {
+   757	      const a = Math.PI * (0.15 + fr * 0.18);
+   758	      const len = 16 + prnd(i * 6 + fr, 32) * 10;
+   759	      ctx.strokeStyle = dim(fr % 2 ? "#2f8a55" : "#3fa066"); ctx.lineWidth = 2.6;
+   760	      ctx.beginPath(); ctx.moveTo(topX, topY);
+   761	      ctx.quadraticCurveTo(topX - Math.cos(a) * len * 0.7, topY - Math.sin(a) * len * 0.55,
+   762	                           topX - Math.cos(a) * len, topY - Math.sin(a) * len * 0.2 + 7);
+   763	      ctx.stroke();
+   764	    }
+   765	    ctx.fillStyle = dim("#6b4a2a");
+   766	    ctx.beginPath(); ctx.arc(topX + 3, topY + 4, 2.4, 0, Math.PI * 2); ctx.fill();
+   767	    ctx.beginPath(); ctx.arc(topX - 2, topY + 5, 2.1, 0, Math.PI * 2); ctx.fill();
+   768	  }
+   769	}
+   770	
+   771	function drawAnemones() {
+   772	  const floor = seaFloorY();
+   773	  const COL = ["#ff8fbf", "#ffd166", "#8fe3ff", "#c792ff"];
+   774	  for (let i = 0; i < 7; i++) {
+   775	    const x = prnd(i, 61) * canvas.width, col = COL[i % COL.length];
+   776	    const base = floor - prnd(i, 62) * 20;
+   777	    ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.lineCap = "round"; ctx.globalAlpha = 0.55;
+   778	    for (let t = 0; t < 9; t++) {
+   779	      const a = -Math.PI / 2 + (t - 4) * 0.2;
+   780	      const len = 12 + prnd(i * 9 + t, 63) * 12;
+   781	      const sway = Math.sin(time * 1.6 + i + t * 0.5) * 3;
+   782	      ctx.beginPath(); ctx.moveTo(x, base);
+   783	      ctx.quadraticCurveTo(x + Math.cos(a) * len * 0.5 + sway, base + Math.sin(a) * len * 0.5, x + Math.cos(a) * len + sway * 1.6, base + Math.sin(a) * len);
+   784	      ctx.stroke();
+   785	    }
+   786	    ctx.globalAlpha = 1;
+   787	  }
+   788	}
+   789	
+   790	// weiche Lichtstrahlen von oben (Riff)
+   791	function drawSunShafts() {
+   792	  const light = getPalette(dayTime).light;
+   793	  if (light < 0.45) return;
+   794	  ctx.save();
+   795	  ctx.globalCompositeOperation = "lighter";
+   796	  for (let i = 0; i < 4; i++) {
+   797	    const x = canvas.width * (0.12 + i * 0.26) + Math.sin(time * 0.25 + i) * 18;
+   798	    const g = ctx.createLinearGradient(x, horizonY, x, canvas.height * 0.8);
+   799	    g.addColorStop(0, `rgba(190,255,250,${0.09 * light})`);
+   800	    g.addColorStop(1, "rgba(190,255,250,0)");
+   801	    ctx.fillStyle = g;
+   802	    ctx.beginPath();
+   803	    ctx.moveTo(x - 14, horizonY); ctx.lineTo(x + 14, horizonY);
+   804	    ctx.lineTo(x + 52, canvas.height * 0.8); ctx.lineTo(x - 34, canvas.height * 0.8);
+   805	    ctx.closePath(); ctx.fill();
+   806	  }
+   807	  ctx.restore();
+   808	}
+   809	
+   810	// ===================== Arktis =====================
+   811	// Arktis: hier geht `zweiteilig` NICHT. Das Polarlicht ist bewegt und liegt
+   812	// HINTER Schneefeld und Eisbergen; im zweiteiligen Verfahren kaeme es nach
+   813	// vorn. Also von Hand: erst das Polarlicht live, dann der Rest aufs Blech.
+   814	// (Genau der Fall, vor dem der Kommentar bei `zweiteilig` warnt.)
+   815	function drawIcebergs() {
+   816	  _polarlicht();
+   817	  Blech.bild("fern:arktis", kulissenSig(),
+   818	             0, horizonY - 80, canvas.width, 100, _icebergs);
+   819	}
+   820	
+   821	function _polarlicht() {
+   822	  const hy = horizonY;
+   823	  // Polarlicht bei wenig Licht
+   824	  const light = getPalette(dayTime).light;
+   825	  if (light < 0.55) {
+   826	    ctx.save(); ctx.globalCompositeOperation = "lighter";
+   827	    for (let i = 0; i < 3; i++) {
+   828	      const x = canvas.width * (0.15 + i * 0.3);
+   829	      const g = ctx.createLinearGradient(x, hy * 0.1, x, hy * 0.85);
+   830	      const col = i === 1 ? "120,255,190" : "140,200,255";
+   831	      g.addColorStop(0, `rgba(${col},0)`);
+   832	      g.addColorStop(0.5, `rgba(${col},${0.13 * (1 - light) + 0.04 * Math.sin(time * 0.5 + i)})`);
+   833	      g.addColorStop(1, `rgba(${col},0)`);
+   834	      ctx.fillStyle = g;
+   835	      ctx.beginPath();
+   836	      const wob = Math.sin(time * 0.4 + i) * 22;
+   837	      ctx.moveTo(x - 40 + wob, hy * 0.1); ctx.lineTo(x + 30 + wob, hy * 0.1);
+   838	      ctx.lineTo(x + 62 - wob, hy * 0.85); ctx.lineTo(x - 18 - wob, hy * 0.85);
+   839	      ctx.closePath(); ctx.fill();
+   840	    }
+   841	    ctx.restore();
+   842	  }
+   843	}
+   844	
+   845	function _icebergs() {
+   846	  const hy = horizonY;
+   847	  const light = kulissenLicht();
+   848	  // Schneefeld-Silhouette am Horizont
+   849	  ctx.fillStyle = `rgba(206,228,240,${0.4 * light + 0.25})`;
+   850	  ctx.beginPath(); ctx.moveTo(0, hy + 2);
+   851	  for (let i = 0; i <= 12; i++) ctx.lineTo((i / 12) * canvas.width, hy - 10 - prnd(i, 76) * 18);
+   852	  ctx.lineTo(canvas.width, hy + 2); ctx.closePath(); ctx.fill();
+   853	
+   854	  // Eisberge: Sonnenseite, Schattenseite, blaue Kante an der Wasserlinie
+   855	  for (let i = 0; i < 4; i++) {
+   856	    const x = prnd(i, 71) * canvas.width, bw = 30 + prnd(i, 72) * 55, bh = 26 + prnd(i, 73) * 48;
+   857	    const peakX = x + bw * 0.1, peakY = hy - bh;
+   858	    const g = ctx.createLinearGradient(x - bw, peakY, x + bw, hy);
+   859	    g.addColorStop(0, `rgba(250,253,255,${0.85 * light + 0.15})`);
+   860	    g.addColorStop(0.5, `rgba(222,239,248,${0.8 * light + 0.15})`);
+   861	    g.addColorStop(1, `rgba(150,186,208,${0.8 * light + 0.15})`);
+   862	    ctx.fillStyle = g;
+   863	    ctx.beginPath();
+   864	    ctx.moveTo(x - bw, hy + 2); ctx.lineTo(x - bw * 0.55, hy - bh * 0.45);
+   865	    ctx.lineTo(x - bw * 0.3, hy - bh * 0.72); ctx.lineTo(peakX, peakY);
+   866	    ctx.lineTo(x + bw * 0.5, hy - bh * 0.45); ctx.lineTo(x + bw * 0.75, hy - bh * 0.6);
+   867	    ctx.lineTo(x + bw, hy + 2);
+   868	    ctx.closePath(); ctx.fill();
+   869	    // Schattenflanke
+   870	    ctx.fillStyle = `rgba(120,160,190,${0.32 * light + 0.1})`;
+   871	    ctx.beginPath();
+   872	    ctx.moveTo(peakX, peakY); ctx.lineTo(x + bw * 0.5, hy - bh * 0.45);
+   873	    ctx.lineTo(x + bw, hy + 2); ctx.lineTo(x + bw * 0.2, hy + 2);
+   874	    ctx.closePath(); ctx.fill();
+   875	    // Türkise Kante direkt über dem Wasser
+   876	    ctx.fillStyle = `rgba(120,220,235,${0.3 * light + 0.12})`;
+   877	    ctx.fillRect(x - bw, hy - 4, bw * 2, 6);
+   878	    // Spiegelung
+   879	    ctx.save(); ctx.globalAlpha = 0.16 * light; ctx.scale(1, -1);
+   880	    ctx.fillStyle = "#cfe6f2";
+   881	    ctx.beginPath();
+   882	    ctx.moveTo(x - bw, -hy - 2); ctx.lineTo(peakX, -hy + bh * 0.5); ctx.lineTo(x + bw, -hy - 2);
+   883	    ctx.closePath(); ctx.fill();
+   884	    ctx.restore();
+   885	  }
+   886	}
+   887	
+   888	function drawIceUnderside() {
+   889	  // Eiszapfen an der Unterseite der Decke
+   890	  const y0 = horizonY + dockHeight * 1.5 * 0.5;
+   891	  ctx.fillStyle = "rgba(190,224,240,0.5)";
+   892	  for (let i = 0; i < 16; i++) {
+   893	    const x = prnd(i, 81) * canvas.width, len = 8 + prnd(i, 82) * 26, wdt = 4 + prnd(i, 83) * 6;
+   894	    ctx.beginPath(); ctx.moveTo(x - wdt, y0); ctx.lineTo(x, y0 + len); ctx.lineTo(x + wdt, y0); ctx.closePath(); ctx.fill();
+   895	  }
+   896	}

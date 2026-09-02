@@ -1,0 +1,1714 @@
+     1	// --- Die Phaser-Ebene: WebGL unter der Spielszene (#95) ---
+     2	//
+     3	// Bauweise (aus SPIKE-PHASER.md, dort vermessen):
+     4	//
+     5	//   [ #gameCanvas ]   Canvas 2D, OBEN.  Oberflaeche: Menues, HUD, Holz, Schrift.
+     6	//                     i18n.js/font.js patchen weiter ihre Canvas-Prototypen.
+     7	//   [ #weltEbene  ]   Phaser/WebGL, DARUNTER. Ein Vollbild-Shader (world-frag.js),
+     8	//                     der die komplette Weltszene als Textur bekommt.
+     9	//
+    10	// Die Weltszene wird weiterhin von den bestehenden Funktionen in Canvas 2D
+    11	// gezeichnet (draw.js, backdrop.js, locations.js, fish.js ...), nur in einen
+    12	// OFFSCREEN-Puffer (World.canvas). Der Shader veredelt sie: Brechung, echte
+    13	// Kaustik, Beer-Lambert-Truebung, Spiegelung, Lichtschaechte, Meeresschnee.
+    14	// Weil die Fische IN der Textur liegen, liegen sie unter dem Tiefen-Schleier
+    15	// und werden vom Wasser gebrochen - die Zeichenreihenfolge des Spiels
+    16	// (script.js: Fische VOR Kaustik/Nebel/Wasser) bleibt damit die Wahrheit.
+    17	//
+    18	// Phaser wird NACH dem ersten Bild nachgeladen (Messung im Nachweis: kostet
+    19	// null Startzeit, weil der Ladebildschirm 2,6 s laeuft). Scheitert das Laden
+    20	// oder geht der WebGL-Kontext verloren, faellt alles auf den alten Weg
+    21	// zurueck: eine Canvas-2D-Ebene, byte-genau der Ablauf von vorher.
+    22	//
+    23	// Getaktet wird Phaser von UNSEREM gameLoop (loop.stop() + loop.step()),
+    24	// nicht von sich selbst - sonst zeichnet er doppelt (Nachweis, tools/sync.js).
+    25	
+    26	// Wasser-Charakter je Ort. Das ist Gestaltung, keine Technik:
+    27	//   refr    Brechung (wie stark das Wasser die Szene verbiegt)
+    28	//   caust   Kaustik-Netz und Lichtschaechte
+    29	//   mirror  Spiegelung von Steg/Boot/Angler/Himmel unter der Wasserlinie
+    30	//   glitz   Sonnenglitzern unter der Oberflaeche
+    31	//   murk    Truebung mit der Tiefe (Riff = klar, Tiefsee = Suppe)
+    32	//   foam    Schaumlinie auf der Welle (Arktis: zugefroren, keine)
+    33	//   vig     Vignette
+    34	//   bloom   echtes Leuchten (additiver Halo um alles Helle; nachts staerker)
+    35	const WATER_PROFILES = {
+    36	  see:     { refr: 1.0,  caust: 0.9,  mirror: 0.55, glitz: 0.8, murk: 1.0,  foam: 1.0, vig: 1.0,  bloom: 0.3 },
+    37	  boot:    { refr: 1.1,  caust: 0.7,  mirror: 0.65, glitz: 1.0, murk: 1.15, foam: 1.0, vig: 1.0,  bloom: 0.35 },
+    38	  kueste:  { refr: 1.25, caust: 0.8,  mirror: 0.5,  glitz: 1.1, murk: 1.05, foam: 1.3, vig: 1.0,  bloom: 0.3 },
+    39	  riff:    { refr: 1.0,  caust: 1.6,  mirror: 0.45, glitz: 1.2, murk: 0.55, foam: 1.0, vig: 0.9,  bloom: 0.4 },
+    40	  tiefsee: { refr: 1.0,  caust: 0,    mirror: 0,    glitz: 0,   murk: 1.0,  foam: 0,   vig: 1.15, bloom: 1.2, deep: 1 },
+    41	  // Arktis: die Eisdecke (uLid) schuetzt das Eis vor den Wellen - DARUNTER
+    42	  // darf das Wasser ruhig wogen und brechen wie an den anderen Orten
+    43	  arktis:  { refr: 0.65, caust: 0.18, mirror: 0,    glitz: 0,   murk: 1.0,  foam: 0,   vig: 1.0,  bloom: 0.3 }
+    44	};
+    45	
+    46	// ===================== Leistungsstufen (#107) =====================
+    47	//
+    48	// Der Umzug hat drei Posten je Bild dazugebaut, und ALLE DREI haengen an der
+    49	// Pixelzahl der Effekt-Ebene: die Szene wird gerastert, dann in voller Groesse
+    50	// zur GPU kopiert, dann laeuft der Shader pixelweise darueber. Bei 1170x2532
+    51	// sind das knapp drei Millionen Pixel, dreimal angefasst.
+    52	//
+    53	// Deshalb ist die Aufloesung der Effekt-Ebene der Regler, nicht ein Effekt.
+    54	// Wasser, Licht und Truebung sind niederfrequent; halbiert man die Kante,
+    55	// fallen alle drei Posten auf ein Viertel. Es geht nur, weil die OBERFLAECHE
+    56	// (Schrift, Menues, Holz, HUD) eine eigene Canvas-2D-Ebene DARUEBER ist und
+    57	// in voller Schaerfe bleibt - genau der Hybrid aus SPIKE-PHASER.md.
+    58	//
+    59	//   skala    Faktor auf die Aufloesung der Effekt-Ebene (Szene-Puffer UND
+    60	//            Phaser-Flaeche, immer gemeinsam - unterschiedliche Groessen
+    61	//            heissen entweder Matsch oder Flimmern)
+    62	//   ringe    Bloom: 2 Ringe = 12 Abtastungen, 1 Ring = 6, 0 = aus
+    63	//   oktaven  Kaustik: 2 = grobes Netz + feines Flirren, 1 = nur das grobe
+    64	//            (dazu: keine Lichtschaechte, im Tiefsee-Zweig ein Rauschen
+    65	//            statt fBm und eine Schneeebene statt zweien)
+    66	//   takt     Wie oft die Welt-Ebene ueberhaupt neu gebaut wird: 1 = jedes Bild,
+    67	//            2 = jedes zweite. Das halbiert Kopie, Upload UND Shader auf einen
+    68	//            Schlag - und zwar ohne ein einziges Pixel aufzugeben. Bezahlt wird
+    69	//            mit der Bewegung: das Wasser und die Fische laufen dann mit 30
+    70	//            Bildern, waehrend Menue und HUD bei 60 bleiben. Deshalb erst auf
+    71	//            der Notstufe.
+    72	//   uiDpr    Deckel fuer die OBERFLAECHE. Bleibt bis zur letzten Stufe bei 3 -
+    73	//            dort haengt die Schrift dran, das gibt man als Letztes auf.
+    74	//
+    75	// STUFE 0 STEHT SEIT RUNDE 3 BEI uiDpr 3, nicht mehr bei 2 (#107). Runde 1 hat
+    76	// sie als Notstufe gebaut, und eine Notstufe darf Schaerfe opfern. Inzwischen
+    77	// ist sie auf einem Telefon die VOREINSTELLUNG - und dann muss sie genau das
+    78	// sein, was das Spiel vor dem Umzug war: eine einzige, undurchsichtige
+    79	// Canvas-2D-Ebene in voller Aufloesung. Das ist der Stand, den Dustin monatelang
+    80	// gespielt hat. Wer es trotzdem billiger braucht: Diagnose -> UI-DPR.
+    81	const WORLD_TIERS = [
+    82	  { id: 0, name: "Canvas 2D", kurz: "2D",      skala: 0,    ringe: 0, oktaven: 0, takt: 1, uiDpr: 3 },
+    83	  // takt war hier bis 02.09. auf 2. Der Geraetelauf (log.js) hat gezeigt, dass
+    84	  // ein Takt > 1 NICHT hilft, sondern schadet: am See 31 ms je Bild gegen 23 ms
+    85	  // bei Takt 1, und der Upload stieg dabei von 13 auf 21 ms. Die Entlastung auf
+    86	  // dieser Stufe kommt aus `skala` und `uiDpr`, nicht aus dem Takt.
+    87	  { id: 1, name: "sparsam",   kurz: "SPARSAM", skala: 0.5,  ringe: 0, oktaven: 1, takt: 1, uiDpr: 2 },
+    88	  { id: 2, name: "mittel",    kurz: "MITTEL",  skala: 0.7,  ringe: 1, oktaven: 2, takt: 1, uiDpr: 3 },
+    89	  { id: 3, name: "voll",      kurz: "VOLL",    skala: 1.0,  ringe: 2, oktaven: 2, takt: 1, uiDpr: 3 }
+    90	];
+    91	
+    92	// ===================== Diagnose-Schalter (#107, Runde 2) =====================
+    93	//
+    94	// Warum das hier steht: Runde 1 hat einen REGLER gebaut (Aufloesung) und damit
+    95	// unterstellt, das Problem sei die Pixelzahl. Auf einem A17 Pro stimmt das
+    96	// nicht - das Geraet rechnet echte 3D-Spiele in dieser Aufloesung. Wenn dort
+    97	// ein 2D-Wasserfilter klemmt, ist ein Posten der Pipeline pathologisch, und
+    98	// dann muss man ihn EINZELN abschalten koennen, statt Effekte zu opfern.
+    99	//
+   100	// Deshalb kann jeder Posten am Geraet einzeln aus (Einstellungen -> Diagnose,
+   101	// oder per URL). Das ist kein Aussehen, das sind Messgeraete.
+   102	const WORLD_PFADE = ["sub", "direkt", "kopie", "refresh"];
+   103	
+   104	// Ist das ein Telefon? Nicht "hat es ein hochaufloesendes Display" (das haben
+   105	// Notebooks auch), sondern: kleine Flaeche UND Finger. Genau diese Geraete
+   106	// starten in Canvas 2D (siehe _pickTier).
+   107	function istTelefon() {
+   108	  try {
+   109	    const schmal = Math.min(window.innerWidth, window.innerHeight) < 700;
+   110	    const finger = (navigator.maxTouchPoints || 0) > 0
+   111	                || (window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
+   112	    return schmal && finger;
+   113	  } catch (e) { return false; }
+   114	}
+   115	
+   116	const World = {
+   117	  state: "aus",        // aus | laedt | bereit | fehler
+   118	  suspended: false,    // Kontextverlust o. Ae.: solange true laeuft der Rueckfallweg
+   119	  needsFrame: true,    // erzwingt einen Welt-Frame (nach Boot/Resize/Rueckkehr)
+   120	  canvas: null,        // Puffer, in den die Szene gezeichnet wird
+   121	  ctx: null,
+   122	  dpr: 1,
+   123	  game: null, scene: null, quad: null, tex: null, holder: null,
+   124	  frames: 0,
+   125	  tier: 3,             // Leistungsstufe, siehe WORLD_TIERS
+   126	  fest: false,         // true = von Hand gesetzt, die Notbremse laesst sie in Ruhe
+   127	  roh: false,          // Diagnose: Szene 1:1 durchreichen, kein Effekt (#107)
+   128	
+   129	  // ===================== Der Umbau: Szene als GPU-Objekte (#107) ===========
+   130	  // true  = die Welt liegt als Phaser-Objekte auf der GPU (gpu.js), der
+   131	  //         Wasser-Shader ist ein Kamera-Filter. Nichts wird je Bild gerastert
+   132	  //         oder hochgeladen.
+   133	  // false = der Weg von vorher: Szene in eine Leinwand, Leinwand als Textur
+   134	  //         hoch, Vollbild-Quad. Zum Gegenmessen: ?szene=leinwand
+   135	  // AUS, gemessen am 01.09. auf dem iPhone 15 Pro Max (Safari, 430x775 @3x):
+   136	  // bei gleicher Aufloesung liefern beide Wege dieselbe Bildrate. Der Umbau
+   137	  // ist leistungsneutral — der Aufwand je GPU-Objekt ersetzt genau das, was
+   138	  // Rastern und Upload gekostet haben. Bei Gleichstand gewinnt der einfachere
+   139	  // Weg: die Leinwand ist erprobt, traegt den Ladebildschirm und ist der
+   140	  // Rueckfallweg. Der Umbau bleibt vollstaendig im Code — falls WebKit,
+   141	  // Phaser oder ein anderes Geraet die Rechnung eines Tages drehen, ist er
+   142	  // eine Zeile entfernt. Zum Gegenmessen: ?szene=gpu
+   143	  gpuSzene: false,
+   144	  // ===================== Der dritte Weg: DYN (#107, Runde 11, 02.09.) ======
+   145	  //
+   146	  // Zwei Wege gab es, beide auf dem Geraet vermessen, beide an einer Wand:
+   147	  //
+   148	  //   LEINWAND   Szene in Canvas 2D rastern, als Textur hochladen, ein Quad
+   149	  //              mit dem Wasser-Shader zeigt sie. GPU-seitig billig (ein
+   150	  //              Durchgang), aber der Upload eines frischen Vollbilds kostet
+   151	  //              auf dem iPhone 16-19 ms bei 3x - und zwar fest, weil WebKit
+   152	  //              die Leinwand erst fertigrechnen muss, bevor sie gelesen wird.
+   153	  //   GPU-FILTER Szene als Phaser-Objekte, der Wasser-Shader als KAMERA-FILTER.
+   154	  //              Kein Upload - aber die Kamera rendert laut Phaser-Doku "in
+   155	  //              eine Textur, wendet interne Filter an, zeichnet das Ergebnis
+   156	  //              in eine weitere Textur, wendet externe Filter an, rendert auf
+   157	  //              den Kontext": drei bis vier bildschirmfuellende Durchgaenge.
+   158	  //              Gemessen: 3x 27-32 fps, 2x 39 fps, 1,5x 72 fps. Skaliert nicht.
+   159	  //
+   160	  // DYN nimmt von beiden das Billige: die Objekte aus gpu.js (kein Upload)
+   161	  // werden in EINE DynamicTexture gezeichnet (ein Durchgang), und darueber
+   162	  // laeuft der bestehende Quad-Shader (ein Durchgang) - genau die Bauweise,
+   163	  // deren GPU-Seite als "see-noup" mit 14 ms bei 3x gemessen ist. Die
+   164	  // Hauptkamera ignoriert die Objekte, sonst stuenden sie doppelt im Bild.
+   165	  //
+   166	  //   ?szene=dyn          dieser Weg
+   167	  //   ?dynflip=0|1        Orientierung der DynamicTexture (Framebuffer-Texturen
+   168	  //                       liegen in Phaser auf dem Kopf; stehen die Berge
+   169	  //                       unten, ist es der andere Wert)
+   170	  dynWeg: false,
+   171	  dyn: null,           // die DynamicTexture ("weltdyn")
+   172	  _dynFlip: 1,
+   173	
+   174	  // --- Die drei Wege der Szene zur GPU ------------------------------------
+   175	  //   direkt   Die Szene wird SOFORT in einen OffscreenCanvas gezeichnet, der
+   176	  //            auch hochgeladen wird. Keine Vollbild-Kopie. Moeglich, seit
+   177	  //            i18n.js und font.js auch OffscreenCanvasRenderingContext2D
+   178	  //            flicken.
+   179	  //   kopie    Der Weg aus Runde 1: DOM-Canvas -> drawImage -> OffscreenCanvas
+   180	  //            -> transferToImageBitmap. Eine zusaetzliche Vollbild-Kopie.
+   181	  //   refresh  Phasers eigener Weg: texImage2D direkt von der Leinwand. Weder
+   182	  //            zweite Leinwand noch ImageBitmap.
+   183	  //   sub      Die Szene-Leinwand geht DIREKT in `texSubImage2D`. Ein einziger
+   184	  //            Aufruf, kein Zwischenbild - und auf einem Telefon der teuerste
+   185	  //            Weg von allen. Siehe unten.
+   186	  //
+   187	  // WELCHER WEG GILT: DER GEMESSENE (#107, Runde 5)
+   188	  //
+   189	  // Diese Wahl ist dreimal per Ueberlegung getroffen und dreimal falsch
+   190	  // gewesen. Runde 3 hat `sub` gesetzt, weil er die wenigsten Bytes bewegt -
+   191	  // eine Rechnung, die stimmt und nichts erklaert. Auf dem Entwicklungsrechner
+   192	  // schien sie bestaetigt, weil dort JEDER Weg 0,1 ms kostet. Auf dem Telefon
+   193	  // war es der Unterschied zwischen 19 und 68 Bildern je Sekunde.
+   194	  //
+   195	  // Der Grund ist keine Bandbreite, sondern ein Rueckleseweg. `texSubImage2D`
+   196	  // von einem 2D-Canvas zwingt den Browser, dessen GPU-Flaeche erst in den
+   197	  // Hauptspeicher zu holen - das Rastern der ganzen Szene faellt dabei an und
+   198	  // wird diesem einen Aufruf angelastet. `transferToImageBitmap` reicht
+   199	  // dieselbe Flaeche weiter, ohne sie anzufassen.
+   200	  //
+   201	  //   Gemessen, 390x844@3x, CPU 4x gedrosselt, Median ueber ~150 Bilder:
+   202	  //   Pfad             Szene   Upload   Bild gesamt   FPS
+   203	  //   sub              9,3     38,1     52,9 ms       18,9
+   204	  //   direkt           9,1      0,0     14,0 ms       71,4
+   205	  //   direkt @3x       10,0     0,1     14,7 ms       68,0
+   206	  //
+   207	  // NACHTRAG, und er gehoert hierher, weil er dieselbe Falle noch einmal ist:
+   208	  // die Zahlen oben stammen von einer Seite, auf der vorher tausende
+   209	  // `getImageData`-Aufrufe fuer einen anderen Messversuch gelaufen waren. Das
+   210	  // nimmt dem Browser die Leinwand dauerhaft von der GPU und macht aus jedem
+   211	  // Upload einen CPU-Weg. Gemessen wurde also das Messgeraet.
+   212	  //
+   213	  // Sauber gemessen, auf einer frischen Seite, kosten ALLE VIER Wege dasselbe
+   214	  // (0,2-0,3 ms) und das Spiel laeuft in jedem 4x gedrosselt mit ~100 Bildern.
+   215	  // Hier ist also nichts zu holen und nichts zu entscheiden.
+   216	  //
+   217	  // Deshalb bleibt die Voreinstellung, wie sie war. Eine ungemessene
+   218	  // Voreinstellung zu aendern, weil eine Ueberlegung dafuer spricht, ist genau
+   219	  // das, was Runde 3 getan hat. Welcher Weg auf einem TELEFON schnell ist,
+   220	  // beantwortet der Pruefstand (bench.js) - er hat eine Zeile je Weg. Bis die
+   221	  // Antwort da ist, wird hier nichts gedreht.
+   222	  //
+   223	  // `?weltab=1` misst die Wege im Lauf gegeneinander (`_abStart`/`_abProbe`)
+   224	  // und merkt sich den Sieger.
+   225	  pfad: "sub",
+   226	  teilupload: true,    // texSubImage2D statt texImage2D (kein Neuanlegen je Bild)
+   227	  msaa: false,         // Mehrfachabtastung am Standard-Framebuffer, siehe boot()
+   228	  taktFest: 0,         // Diagnose: Welt-Takt erzwingen (0 = der Stufe folgen)
+   229	  skalaFest: 0,        // Diagnose: Skala der Effekt-Ebene erzwingen (0 = Stufe)
+   230	  // Einzelne Effekte abschalten - NUR zum Einkreisen. Das Aussehen bleibt sonst
+   231	  // unangetastet; wer hier etwas ausschaltet, misst, er gestaltet nicht.
+   232	  aus: { bloom: false, kaustik: false, brechung: false, spiegel: false,
+   233	         glitzer: false, truebung: false, schnee: false },
+   234	
+   235	  _p: null,            // Shader-Profil des aktuellen Frames
+   236	  _fails: 0,
+   237	
+   238	  // ===================== Die Zahl, die sechs Runden gefehlt hat (#107, R7) ===
+   239	  //
+   240	  // `messStopp` nimmt Rastern UND Upload zusammen weg. Die Differenz zur
+   241	  // vollen Zeile ist deshalb "A + B" und sagt nicht, welcher von beiden es
+   242	  // ist - und genau davon haengt ab, ob der Umbau auf GPU-Objekte etwas
+   243	  // bringt. Er entfernt beide; wenn A schon nichts kostet, kostet er Tage
+   244	  // fuer die Haelfte des Gewinns.
+   245	  //
+   246	  // `szeneStopp` trennt sie: die Szene wird NICHT gezeichnet, die (unveraen-
+   247	  // derte) Leinwand geht trotzdem jedes Bild hoch. Damit steht
+   248	  //
+   249	  //     3x voll                A + B + C + D
+   250	  //     3x Upload ohne Szene       B + C + D   -> Differenz = A (Rastern)
+   251	  //     3x o. Upload                   C + D   -> Differenz = B (Upload)
+   252	  //
+   253	  // WARUM NICHT ANDERSHERUM (zeichnen, aber nicht hochladen)? Weil Canvas 2D
+   254	  // faul ist: eine Leinwand, die niemand liest, rastert der Browser womoeglich
+   255	  // gar nicht erst. Diese Zeile haette dann A gemessen und 0 gefunden - der
+   256	  // gleiche Trugschluss wie in Runde 4, nur teurer. Der Upload ist der
+   257	  // Beobachter, der das Rastern erzwingt; also bleibt er stehen und die Szene
+   258	  // faellt weg.
+   259	  szeneStopp: false,
+   260	
+   261	  // Die Welt-Ebene ist verdeckt: ueber ihr liegt ein undurchsichtiger
+   262	  // Vollbild-Schirm (Becken/Hub). Siehe `zeigen()`.
+   263	  verdeckt: false,
+   264	
+   265	  get active() { return this.state === "bereit" && !this.suspended && this.tier > 0; },
+   266	  get stufe() { return WORLD_TIERS[this.tier] || WORLD_TIERS[3]; },
+   267	
+   268	  // ===================== Der Deckel fuer die Welt-Ebene (#107, Runde 4) ======
+   269	  //
+   270	  // Die Welt-Ebene lief bisher in derselben Aufloesung wie die Oberflaeche: auf
+   271	  // einem iPhone 15 Pro Max 1170x2532. Das sind 11,85 MB, die JEDES Bild
+   272	  // ueber den Bus in eine Textur wandern — genau der Posten, den Dustin auf
+   273	  // seinem Geraet hochschnellen sieht, sobald die Grafik auf VOLL steht.
+   274	  //
+   275	  // Runde 4 hat zwei Zahlen gemessen, die zusammen entscheiden, was hier
+   276	  // richtig ist:
+   277	  //
+   278	  //   1. Aufloesung kostet beim RASTERN fast nichts. Neun Mal weniger Pixel
+   279	  //      (3x -> 1x) machten das Bild nicht schneller (see 5,8 -> 6,2 ms),
+   280	  //      weil die Kosten an der Zahl der Zeichenbefehle haengen, nicht an der
+   281	  //      Zahl der Pixel.
+   282	  //   2. Aufloesung kostet beim UPLOAD alles, und zwar quadratisch. Sie ist
+   283	  //      der einzige Posten der ganzen Pipeline, der das tut.
+   284	  //
+   285	  // Daraus folgt etwas Unbequemes: die volle Aufloesung der Welt-Ebene war
+   286	  // ein Posten, fuer den wir voll bezahlt und fast nichts bekommen haben.
+   287	  // Sie wegzunehmen ist deshalb keine Sparmassnahme, sondern das Streichen
+   288	  // einer Rechnung ohne Gegenleistung.
+   289	  //
+   290	  // Und sie faellt an der unauffaelligsten Stelle an, die dieses Spiel hat:
+   291	  // die Welt-Ebene liegt UNTER einem Brechungs-Shader. Was er zeigt, ist
+   292	  // ohnehin verzogen, getruebt und von Kaustik ueberzogen. Die OBERFLAECHE —
+   293	  // Schrift, Menues, Holz, HUD — liegt darueber und bleibt unangetastet bei
+   294	  // vollen 3x. Genau dafuer gibt es den Hybrid.
+   295	  //
+   296	  //   Deckel   Aufloesung   Upload je Bild   davon
+   297	  //   3x       1170x2532    11,85 MB         100 %
+   298	  //   2x        780x1688     5,27 MB          44 %
+   299	  //   1.5x      585x1266     2,96 MB          25 %
+   300	  //
+   301	  // 2x ist die Voreinstellung auf Telefonen. Zum Gegenmessen am Geraet:
+   302	  // ?weltdpr=3 (der alte Zustand) oder Diagnose -> Welt-DPR.
+   303	  // GEMESSEN AUF DEM GERAET, nicht geschaetzt (#107, Runde 5). iPhone 15 Pro
+   304	  // Max, Safari, gewachsener Spielstand, nach dem Dunst-Fix in sprites.js:
+   305	  //
+   306	  //   Welt-Deckel   fps    p95    Hakler/s
+   307	  //   1x            58,8    18     0
+   308	  //   1,5x          58,8    18     0        <-- das hier
+   309	  //   2x            55,6    23     0,33
+   310	  //   3x            45,5    24     0
+   311	  //   Obergrenze    58,8    17     0        (Leerlauf, nichts gezeichnet)
+   312	  //
+   313	  // 1,5x ist die HOECHSTE Stufe, die volle 60 Bilder haelt, und sie haelt sie
+   314	  // ohne einen einzigen Hakler - der p95 liegt eine Millisekunde ueber dem
+   315	  // Leerlauf. Darunter (1x) wird es nicht schneller, nur unschaerfer: die
+   316	  // Schaumlinie an der Wasserkante wird treppig und Berge und Schilf werden
+   317	  // weich (Bildvergleich, 31.08.).
+   318	  //
+   319	  // Warum nicht 2x oder 3x: was dort noch fehlt, ist kein Effekt und keine
+   320	  // Zeichenarbeit mehr, sondern nur die Pixelzahl der Welt-Ebene - sie wird
+   321	  // jedes Bild gerastert und als Textur zur GPU geschoben. Das verschwindet
+   322	  // erst, wenn der Weltinhalt GPU-resident wird (docs/LEISTUNG-BASIS.md,
+   323	  // "Die Architektur"). Bis dahin ist 1,5x der gemessene beste Punkt.
+   324	  //
+   325	  // Die OBERFLAECHE - Schrift, Menues, Holz, HUD - bleibt davon unberuehrt bei
+   326	  // vollen 3x. Genau dafuer gibt es den Hybrid.
+   327	  //
+   328	  // ===================== WAS DIESER DECKEL KOSTET (#107, Runde 6) ==========
+   329	  //
+   330	  // Er kostet die SCHAERFE DER FISCHE, und zwar sichtbar. Dustin: "Selbst hier
+   331	  // auf dem PC sind die Fische im See im Verhaeltnis zum Aquarium unscharf."
+   332	  //
+   333	  // Der Grund steht in den zwei Zeilen darueber und darunter: die See-Fische
+   334	  // werden auf der Welt-Ebene gezeichnet (1,5x), die Becken-Fische auf der
+   335	  // Oberflaeche (3x). Dasselbe Bild in halber Aufloesung, vom Compositor
+   336	  // wieder aufgeblasen. Belegt mit demselben Karpfen in derselben Laenge,
+   337	  // beide eingefroren, fuenffach vergroessert - der Unterschied ist kein
+   338	  // Detail, er ist Faktor 2.
+   339	  //
+   340	  // Also: warum nicht hoeher? Weil die Gerätezahlen darueber es verbieten.
+   341	  // 2x kostet 3,2 Bilder je Sekunde und den ersten Hakler, 3x kostet 13.
+   342	  // Der Bildvergleich 1,5x / 2x / 3x / Becken zeigt, was man dafuer bekaeme:
+   343	  // schon 2x holt Schuppenboegen und Auge zurueck, 3x ist praktisch das
+   344	  // Becken. Das ist eine Abwaegung und keine Rechnung, deshalb gehoert sie
+   345	  // Dustin - und sie ist genau diese eine Zahl.
+   346	  //
+   347	  // Was den Deckel eines Tages ueberfluessig macht, steht in
+   348	  // docs/LEISTUNG-BASIS.md unter "Die Architektur": GPU-residenter Weltinhalt.
+   349	  // Dann faellt der Posten weg, der hier bezahlt wird (Rastern und Hochladen
+   350	  // der ganzen Szene, jedes Bild), und die Aufloesung kostet nichts mehr.
+   351	  WELT_DECKEL_TELEFON: 1.5,
+   352	
+   353	  // Basis-Aufloesung der Welt-Ebene, bevor die Stufe daran dreht.
+   354	  baseDpr() {
+   355	    const geraet = window.devicePixelRatio || 1;
+   356	    const deckel = istTelefon() ? this.WELT_DECKEL_TELEFON : 2;
+   357	    return this._dprFest || Math.min(geraet, deckel);
+   358	  },
+   359	  // Tatsaechliche Aufloesung der Effekt-Ebene. Unter 1x wird es matschig statt
+   360	  // schnell, deshalb der Boden.
+   361	  //
+   362	  // ===================== Der Deckel faellt (#107, der Umbau) ===============
+   363	  //
+   364	  // `WELT_DECKEL_TELEFON` war der Preis fuer den Upload: die Welt-Ebene lief
+   365	  // auf 1,5x, weil jedes Bild ihre gesamte Pixelzahl ueber den Bus musste, und
+   366	  // das ist der EINZIGE Posten, der quadratisch mit der Aufloesung waechst.
+   367	  // Bezahlt hat ihn die Schaerfe der Fische - Dustin hat es sofort gesehen
+   368	  // ("die See-Fische sind im Verhaeltnis zum Aquarium unscharf"), und im Bild
+   369	  // standen zwei Aufloesungen nebeneinander.
+   370	  //
+   371	  // Im GPU-Weg gibt es diesen Posten nicht mehr. Also gibt es auch den Deckel
+   372	  // nicht mehr: die Welt laeuft in DERSELBEN Aufloesung wie die Oberflaeche.
+   373	  // Damit ist die zweite Aufloesung aus dem Bild verschwunden, und der
+   374	  // See-Fisch ist so scharf wie der Becken-Fisch.
+   375	  //
+   376	  // ===================== Was 3x TROTZDEM noch kostet ======================
+   377	  //
+   378	  // Der Upload ist weg, das Rastern ist weg - aber eine bildschirmfuellende
+   379	  // WebGL-Ebene wird vom BROWSER noch mit der Oberflaeche zusammengesetzt, und
+   380	  // das kostet Flaeche. Gemessen auf dem Entwicklungsrechner (390x844@3x,
+   381	  // CPU 6x gedrosselt) ist der Unterschied zwischen 1,5x und 3x groesser als
+   382	  // alles, was der Umbau innerhalb von JavaScript spart. Deshalb bleibt die
+   383	  // Aufloesung ein REGLER und keine Entscheidung:
+   384	  //
+   385	  //   ?weltdpr=1.5   die Aufloesung von vorher (Fische wieder weicher)
+   386	  //   ?weltdpr=3     Voreinstellung: eine Aufloesung im ganzen Bild
+   387	  //
+   388	  // Welcher Wert auf DUSTINS Geraet richtig ist, sagt der Prueflauf dort
+   389	  // (?wache=1), nicht dieser Rechner.
+   390	  // MESSUNG VOM 01.09., Safari auf dem iPhone 15 Pro Max, 430x775 @3x:
+   391	  // beide Wege liefern bei DERSELBEN Aufloesung dieselbe Bildrate (See 66,7 /
+   392	  // Riff 66,7 / Tiefsee 47,6, null Hakler). Der Deckel von 1,5x war der Preis
+   393	  // fuer den Upload — und dieser Preis ist mit dem Backblech gefallen, nicht
+   394	  // mit dem GPU-Umbau. Deshalb gilt die volle Aufloesung jetzt auf BEIDEN
+   395	  // Wegen: die zwei Aufloesungen im Bild (matschige See-Fische gegen scharfe
+   396	  // Becken-Fische) waren Dustins erster und haerteste Kritikpunkt.
+   397	  // Zum Gegenmessen: ?weltdpr=1.5
+   398	  weltDpr() {
+   399	    return this._dprFest || this.uiDpr();
+   400	  },
+   401	  // Deckel fuer die Oberflaeche (script.js: resizeCanvas).
+   402	  //
+   403	  // `uiFest` ist ein MESSGERAET, kein Regler (Runde 3, #107). Es gibt eine
+   404	  // Frage, die niemand beantwortet hat: im Hybrid liegen ZWEI bildschirm-
+   405	  // fuellende Ebenen uebereinander - die WebGL-Ebene und darueber `#gameCanvas`
+   406	  // mit Alpha, das jedes Bild geleert, neu bemalt und vom Compositor
+   407	  // darueber gemischt wird. Mit ?welt=c2d gibt es nur EINE, undurchsichtige.
+   408	  // Genau in diesem Unterschied kann die Antwort liegen, und kein Regler dieses
+   409	  // Projekts fasst ihn an. `?weltui=2` halbiert die Flaeche der oberen Ebene
+   410	  // (bei 1170x2532: 2,96 -> 1,32 Millionen Pixel) und kostet Schriftschaerfe.
+   411	  // Wird es damit spuerbar besser, ist der Compositor die Spur.
+   412	  // ===================== Textur und Ausgabe getrennt (#107, Runde 11) =====
+   413	  //
+   414	  // Bis hier hing an EINER Zahl (weltDpr) zweierlei: die Groesse der
+   415	  // Szene-Leinwand, die jedes Bild als Textur hochgeht, UND die Groesse der
+   416	  // WebGL-Leinwand, in die der Shader sein Ergebnis schreibt. Beide gleich
+   417	  // gross - das war nie eine Entscheidung, nur die einfachste Verdrahtung.
+   418	  //
+   419	  // Dustins Geraetebefund vom 02.09. (Bildzeit-Anzeige beim SPIELEN, nicht
+   420	  // im Pruefstand): Welt-DPR 1 gibt stabile 60 fps, alles darueber bricht ein.
+   421	  // Der Upload haengt an der Texturgroesse (1x 7 ms, 3x 14 ms) - aber mit
+   422	  // Welt-DPR 1 wird eben auch der SHADER nur in 430x775 gerechnet und das
+   423	  // Ergebnis vom Compositor dreifach hochgezogen. Dann sind nicht nur die
+   424	  // Fische weich, sondern auch Wellenlinie, Kaustik und Glitzern - genau die
+   425	  // Effekte, die ohne Upload gratis in voller Schaerfe zu haben waeren.
+   426	  //
+   427	  // Der Shader liest die Textur ueber normierte Koordinaten (world-frag.js,
+   428	  // `szene()`: p / uRes), also darf die Textur eine andere Groesse haben als
+   429	  // die Ausgabe. `ausDpr` ist die Ausgabe. Ohne `?weltaus=` verhaelt sich
+   430	  // alles wie vorher (Ausgabe = Textur).
+   431	  //
+   432	  //   ?weltdpr=1&weltaus=3   Textur 1x (billiger Upload), Shader in 3x
+   433	  //   ?weltdpr=1&weltaus=2   Mittelweg, wenn 3x im Compositing zu teuer ist
+   434	  //
+   435	  // Was das NICHT loest: die Fische liegen in der Textur und bleiben bei 1x
+   436	  // weich. Dafuer ist der naechste Schritt gedacht (Fische als Sprites in
+   437	  // voller Aufloesung ueber der Textur).
+   438	  _ausFest: 0,
+   439	  ausDpr() { return this._ausFest || this.weltDpr(); },
+   440	
+   441	  uiFest: 0,
+   442	  uiDpr() {
+   443	    const d = window.devicePixelRatio || 1;
+   444	    if (this.uiFest) return Math.min(d, this.uiFest);
+   445	    return Math.min(d, window.innerWidth < 700 ? this.stufe.uiDpr : 2);
+   446	  },
+   447	
+   448	  // ===================== Der Welt-Takt (#107, Runde 10) ====================
+   449	  //
+   450	  // Wird die SZENE in diesem Bild neu gerastert? Nicht: laeuft die Ebene.
+   451	  // Das ist der Unterschied, um den es in dieser Runde geht.
+   452	  //
+   453	  // Bis Runde 9 hiess `takt: 2` (Notstufe): die Welt-Ebene setzt jedes zweite
+   454	  // Bild komplett aus - kein Rastern, kein Upload, aber eben auch KEIN
+   455	  // Shader-Durchlauf. Das Wasser stand dann jedes zweite Bild still, und weil
+   456	  // Brechung, Kaustik und Glitzern allein aus `uTime` leben, sah man genau
+   457	  // das: ein Stottern im Wasser, nicht nur groebere Fischbewegung. Deshalb
+   458	  // war der Takt bisher nur eine Notbremse und nichts, was man freiwillig
+   459	  // einschaltet.
+   460	  //
+   461	  // Der Geraetebefund vom 01.09. macht daraus etwas anderes. Die Zerlegung
+   462	  // sagt: Rastern der Canvas-2D-Szene rund 15 ms, Shader 0-3 ms, Compositing
+   463	  // 2-4 ms. Der teure Posten ist NUR das Rastern - und See und Riff landen
+   464	  // bei voellig verschiedenem Inhalt auf derselben Bildrate (43,5), also
+   465	  // zahlen wir dort fast nur diese feste Gebuehr.
+   466	  //
+   467	  // Also trennen wir die beiden Takte: die Szene wird seltener gerastert,
+   468	  // der Shader laeuft WEITER JEDES BILD ueber die zuletzt hochgeladene
+   469	  // Textur, mit frischem `uTime`. Wasserverzerrung, Spiegelung und
+   470	  // Sonnenglitzern bleiben damit vollstaendig fluessig - gerade die Effekte,
+   471	  // die Dustin als "Gold wert" bezeichnet hat. Groeber wird allein die
+   472	  // Bewegung der Motive IN der Textur (Fische, Angler, Wellenlinie).
+   473	  //
+   474	  // Ob man das sieht, entscheidet das Auge auf dem Geraet, nicht diese Datei.
+   475	  // `?welttakt=2` und das Duell `?duell=takt` sind dafuer da.
+   476	  _tick: 0,
+   477	  faellig() {
+   478	    if (this.needsFrame) return true;
+   479	    // Im GPU-Weg gibt es nichts zu rastern - die Szene liegt bereits als
+   480	    // Phaser-Objekte auf der Karte. Ein Takt > 1 wuerde dort keine Arbeit
+   481	    // sparen, sondern nur Bewegung schlucken.
+   482	    if ((this.gpu || this.dynWeg) && typeof Gpu !== "undefined" && Gpu.bereit) return true;
+   483	    const t = this.taktFest || this.stufe.takt || 1;
+   484	    if (t <= 1) return true;
+   485	    this._tick = (this._tick + 1) % t;
+   486	    return this._tick === 0;
+   487	  },
+   488	
+   489	  // Stufe wechseln: Puffer, Textur und Phaser-Flaeche neu einmessen, die
+   490	  // Oberflaeche gleich mit (ihr Deckel haengt an derselben Tabelle).
+   491	  setTier(n, vonHand) {
+   492	    n = Math.max(0, Math.min(WORLD_TIERS.length - 1, n | 0));
+   493	    if (n === this.tier) return;
+   494	    this.tier = n;
+   495	    if (vonHand) this.fest = true;
+   496	    if (typeof Perf !== "undefined") Perf.stoer(120);
+   497	    this._sichtbarkeit();
+   498	    this.needsFrame = true;
+   499	    // Von Canvas 2D zurueck nach oben: phaser.js wurde nie geholt, also jetzt.
+   500	    if (n > 0 && this.state === "fehler" && !this._script) { this.state = "aus"; this._picked = true; this.load(); }
+   501	    if (typeof resizeCanvas === "function") resizeCanvas();   // ruft World.resize() mit
+   502	    else this._rebuild(true);
+   503	  },
+   504	
+   505	  // ===================== Der Becken-Befund (#107, Runde 7) ==================
+   506	  //
+   507	  // Dustin: "auch wenn ich Menues oeffne, aendern sich die fps." Der Pruefstand
+   508	  // sagt dasselbe: Becken 71,4 gegen 88-113 am Angelplatz. Der Bildschirm, auf
+   509	  // dem jeder Spieler startet, ist der teuerste im Spiel.
+   510	  //
+   511	  // Der Grund steht in `redraw()`: bei `hubScreen` wird das Becken
+   512	  // UNDURCHSICHTIG ueber die ganze Flaeche gemalt und die Funktion kehrt
+   513	  // zurueck, bevor die Welt drankommt. Die Welt-Ebene wird also nicht mehr
+   514	  // neu gezeichnet - aber sie ist noch DA. Der Compositor mischt weiter jedes
+   515	  // Bild zwei bildschirmfuellende Ebenen, von denen die untere zu 100 %
+   516	  // verdeckt ist. Bei 430x775 @3x sind das 3 Millionen Pixel je Bild, die
+   517	  // niemand je sieht. Das ist Posten D aus der Vierer-Zerlegung, in voller
+   518	  // Hoehe und vollstaendig umsonst.
+   519	  //
+   520	  // `display:none` nimmt die Ebene aus dem Compositing (nicht nur aus dem
+   521	  // Bild - `visibility:hidden` oder `opacity:0` wuerden weiter mitgemischt).
+   522	  // Der WebGL-Kontext bleibt erhalten; beim Zurueckkommen sorgt `needsFrame`
+   523	  // dafuer, dass das erste sichtbare Bild frisch ist und nicht der alte
+   524	  // Frontpuffer.
+   525	  //
+   526	  // Was hier NICHT verdeckt wird: der Ladebildschirm (intro.js zeichnet
+   527	  // selbst Welt-Bilder) und Ueberlagerungen (Menuefenster lassen das Wasser
+   528	  // ringsum stehen). Nur ein Schirm, der die ganze Flaeche undurchsichtig
+   529	  // fuellt, darf die Ebene abschalten.
+   530	  zwangSichtbar: false,   // Pruefstand: die Gegenprobe MIT verdeckter Ebene
+   531	
+   532	  zeigen(an) {
+   533	    if (this.zwangSichtbar) an = true;
+   534	    an = !an;                       // Aufrufer sagt "sichtbar", wir merken "verdeckt"
+   535	    if (an === this.verdeckt) return;
+   536	    this.verdeckt = an;
+   537	    if (!an) this.needsFrame = true;
+   538	    this._sichtbarkeit();
+   539	  },
+   540	
+   541	  _sichtbarkeit() {
+   542	    if (!this.holder) return;
+   543	    this.holder.style.display = (this.tier > 0 && !this.verdeckt) ? "" : "none";
+   544	  },
+   545	
+   546	  // Die Diagnose-Schalter: erst der gespeicherte Stand, dann die URL. Wird
+   547	  // VOR _pickTier gelesen, weil der Pfad ueber boot() entscheidet.
+   548	  _leseDiag() {
+   549	    const q = new URLSearchParams(location.search);
+   550	    const sv = typeof save !== "undefined" ? save : null;
+   551	    const d = (sv && sv.gfxDiag) || null;
+   552	    if (d) {
+   553	      // `_pfadFest` schaltet die Startmessung ab: wer den Weg selbst gewaehlt
+   554	      // hat, soll ihn behalten - auch wenn die Messung anders entscheiden wuerde.
+   555	      if (WORLD_PFADE.indexOf(d.pfad) >= 0) { this.pfad = d.pfad; this._pfadFest = true; }
+   556	      if (typeof d.teil === "boolean") this.teilupload = d.teil;
+   557	      if (typeof d.msaa === "boolean") this.msaa = d.msaa;
+   558	      if (typeof d.ui === "number") this.uiFest = d.ui;
+   559	    }
+   560	    // Die Schaerfe-Einstellung (progress.js): einheitliche Aufloesung fuer
+   561	    // Welt und Oberflaeche. Gewinnt gegen den Diagnose-Wert d.ui.
+   562	    if (sv && typeof sv.gfxDpr === "number" && sv.gfxDpr >= 1 && sv.gfxDpr <= 3) this.uiFest = sv.gfxDpr;
+   563	    const p = q.get("weltpfad");
+   564	    if (WORLD_PFADE.indexOf(p) >= 0) { this.pfad = p; this._pfadFest = true; }
+   565	    if (q.get("weltteil")) this.teilupload = q.get("weltteil") !== "0";
+   566	    if (q.get("weltmsaa")) this.msaa = q.get("weltmsaa") !== "0";
+   567	    const tk = parseInt(q.get("welttakt") || "0", 10);
+   568	    if (tk >= 1 && tk <= 4) this.taktFest = tk;
+   569	    const sk = parseFloat(q.get("weltskala") || "0");
+   570	    if (sk > 0.2 && sk <= 1) this.skalaFest = sk;
+   571	    const ud = parseFloat(q.get("weltui") || "0");
+   572	    if (ud >= 1 && ud <= 3) this.uiFest = ud;
+   573	    // Bewusst NICHT aus dem Spielstand: der Filterweg ist heute ein Messweg
+   574	    // und keine Einstellung. Was ein gewachsener Spielstand nicht kennt, kann
+   575	    // er auch nicht kaputt machen.
+   576	    if (q.get("weltgpu")) this._gpuWunsch = q.get("weltgpu") !== "0";
+   577	    if (q.get("weltalpha") === "1") this._alphaWunsch = true;
+   578	    const sz = q.get("szene");
+   579	    if (sz) this.gpuSzene = (sz === "gpu" || sz === "1" || sz === "dyn");
+   580	    if (sz === "dyn") this.dynWeg = true;
+   581	    if (q.get("dynflip") != null) this._dynFlip = q.get("dynflip") === "0" ? 0 : 1;
+   582	    const wd = parseFloat(q.get("weltdpr") || "0");
+   583	    if (wd >= 1 && wd <= 3) this._dprFest = wd;
+   584	    const wa = parseFloat(q.get("weltaus") || "0");
+   585	    if (wa >= 1 && wa <= 3) this._ausFest = wa;
+   586	    for (const k in this.aus) if (q.get("aus_" + k)) this.aus[k] = true;
+   587	  },
+   588	
+   589	  // Diagnose-Stand merken. Nur die drei Schalter, die einen Neustart
+   590	  // ueberleben sollen - die Effekt-Schalter sind Momentaufnahmen.
+   591	  merkeDiag() {
+   592	    try {
+   593	      if (typeof save === "undefined" || !save) return;
+   594	      save.gfxDiag = { pfad: this.pfad, teil: this.teilupload, msaa: this.msaa, ui: this.uiFest };
+   595	      if (typeof saveGame === "function") saveGame();
+   596	    } catch (e) {}
+   597	  },
+   598	
+   599	  // Hoechste Stufe, die die Notbremse VON SELBST anbieten darf. Sie darf
+   600	  // zurueckholen, was sie genommen hat - aber nie mehr als das. Auf einem
+   601	  // Telefon ist das 0: die automatische Leiter klettert dort NIE in die
+   602	  // Phaser-Ebene hinein (Runde 3, #107). Sonst schaltet ein Telefon, das gerade
+   603	  // ruhig laeuft, nach 16 guten Sekunden von selbst auf einen Weg um, der
+   604	  // 744 KB nachlaedt und den es nachweislich nicht traegt.
+   605	  //
+   606	  // Bewusst eine FUNKTION und kein Feld: der Weg dorthin ist nicht immer
+   607	  // _pickTier. Wer erst VOLL waehlt und dann zurueck auf AUTO dreht, kommt an
+   608	  // _pickTier nie wieder vorbei - ein einmal gesetztes Feld haette dann noch
+   609	  // den alten Wert und die Leiter waere frei.
+   610	  // RUNDE 4 (#107) gibt die Leiter wieder frei. Runde 3 hatte sie auf einem
+   611	  // Telefon bei 0 festgenagelt, weil der Hybrid dort nicht trug. Inzwischen
+   612	  // ist gemessen, WARUM er nicht trug — der Vollbild-Upload in voller
+   613	  // Aufloesung (11,85 MB je Bild) und 40 Prozent Zeichenbefehle fuer Fische —
+   614	  // und beides ist behoben (WELT_DECKEL_TELEFON, sprites.js). Die Notbremse
+   615	  // darf also wieder bis nach oben, und wenn es auf einem Geraet doch nicht
+   616	  // reicht, geht sie von selbst zurueck. Genau dafuer ist sie da.
+   617	  autoDeckel() { return 3; },
+   618	
+   619	  // Was AUTO gerade waehlen wuerde. Dieselbe Reihenfolge wie der untere Teil
+   620	  // von _pickTier - die Einstellungen brauchen sie, wenn man von einer festen
+   621	  // Wahl zurueck auf AUTO dreht (progress.js). Vorher stand dort eine feste 3,
+   622	  // und die haette auf einem Telefon ausgerechnet die teuerste Stufe gesetzt.
+   623	  autoTier() {
+   624	    const sv = typeof save !== "undefined" ? save : null;
+   625	    if (sv && typeof sv.gfxAuto === "number") {
+   626	      const g = Math.max(0, Math.min(3, sv.gfxAuto));
+   627	      return g === 0 ? ((sv.gfxAutoNull || 0) >= 3 ? 0 : 1) : Math.min(3, g + 1);
+   628	    }
+   629	    // Voreinstellung: die volle Stufe. Bis Runde 3 stand hier eine Absenkung
+   630	    // fuer hochaufloesende Displays ("2,96 Millionen Pixel jedes Bild") — die
+   631	    // ist weg, weil jetzt der Deckel auf der Welt-Ebene sitzt (baseDpr) statt
+   632	    // auf den Effekten. Pixel waren nie das Problem, sie waren nur teuer im
+   633	    // Upload; die Effekte sind billig und sollen laufen.
+   634	    return 3;
+   635	  },
+   636	
+   637	  // Einmalige Bereinigung der Spielstaende aus den Runden 1 und 2 (#107).
+   638	  //
+   639	  // Das ist kein Uebergehen einer Nutzerentscheidung, sondern das Gegenteil:
+   640	  // was in `save.gfx` und `save.gfxDiag` steht, hat niemand als VORLIEBE
+   641	  // gewaehlt. Es sind Messgeraete-Stellungen aus zwei Runden Fehlersuche - wer
+   642	  // beim Einkreisen einmal VOLL festgenagelt oder den Pfad auf KOPIE gestellt
+   643	  // hat, wuerde den neuen Standard sonst nie zu sehen bekommen und haette den
+   644	  // Eindruck, es habe sich nichts geaendert. Genau EINMAL, mit Merker; jede
+   645	  // Wahl ab jetzt gilt und wird nie wieder angefasst.
+   646	  //
+   647	  // RUNDE 4 raeumt zusaetzlich `gfxAuto`/`gfxAutoNull` weg, und zwar aus
+   648	  // demselben Grund: das ist die Buchfuehrung der Notbremse aus einer Zeit,
+   649	  // in der der Hybrid 11,85 MB je Bild hochlud und 40 Prozent der
+   650	  // Zeichenbefehle in Fische steckte. Unter diesen Bedingungen ist sie mit
+   651	  // Recht nach unten gefahren und hat sich das gemerkt. Die Bedingungen sind
+   652	  // weg; das Gedaechtnis darueber waere jetzt nur noch ein Vorurteil, und
+   653	  // `gfxAutoNull >= 3` haette ein Telefon dauerhaft auf Canvas 2D festgenagelt.
+   654	  //
+   655	  // Wieder: genau EINMAL, eigener Merker. Was der Spieler ab jetzt waehlt und
+   656	  // was die Notbremse ab jetzt findet, bleibt unangetastet.
+   657	  _raeumRunde12() {
+   658	    try {
+   659	      const sv = typeof save !== "undefined" ? save : null;
+   660	      if (!sv) return;
+   661	      if (!sv.gfxR3) {
+   662	        sv.gfxR3 = 1;
+   663	        delete sv.gfxDiag;
+   664	        if (istTelefon()) delete sv.gfx;
+   665	      }
+   666	      if (!sv.gfxR4) {
+   667	        sv.gfxR4 = 1;
+   668	        delete sv.gfxAuto;
+   669	        delete sv.gfxAutoNull;
+   670	        if (istTelefon() && sv.gfx === 0) delete sv.gfx;   // die Wahl aus Runde 3
+   671	        // Auch die Bau-Schalter noch einmal. Runde 3 hat sie schon geraeumt,
+   672	        // aber wer danach beim Einkreisen am Geraet den Pfad auf KOPIE gestellt
+   673	        // oder MSAA eingeschaltet hat, traegt seitdem beides mit sich herum:
+   674	        // den langsameren Upload-Weg und einen vierfachen Framebuffer, der auf
+   675	        // einer Kachel-GPU nachweislich Geld kostet und ein bitgleiches Bild
+   676	        // liefert. Das war Fehlersuche, keine Vorliebe.
+   677	        delete sv.gfxDiag;
+   678	      }
+   679	      // Runde 5: der Upload-Weg wird jetzt gemessen statt geglaubt, und die
+   680	      // Notbremse hat vier Runden lang auf einen Fehler reagiert, den sie nicht
+   681	      // beheben konnte. Wer in dieser Zeit unten gelandet ist - auf Canvas 2D
+   682	      // oder auf einer Sparstufe - sass dort wegen eines 38-ms-Uploads, den es
+   683	      // nicht mehr gibt. Also einmal alles zurueck auf Anfang: gespeicherte
+   684	      // Stufe, Notbremsen-Gedaechtnis und der gemerkte Pfad. Was der Spieler
+   685	      // danach von Hand einstellt, bleibt selbstverstaendlich stehen.
+   686	      if (!sv.gfxR5) {
+   687	        sv.gfxR5 = 1;
+   688	        delete sv.gfx;
+   689	        delete sv.gfxAuto;
+   690	        delete sv.gfxAutoNull;
+   691	        delete sv.gfxDiag;
+   692	      }
+   693	      // RUNDE 6: der Waehler verschwindet aus den Einstellungen (progress.js).
+   694	      //
+   695	      // Damit aendert sich, was ein alter Wert BEDEUTET. Solange es die Zeile
+   696	      // gab, war `save.gfx` eine Wahl, die man auch wieder zuruecknehmen
+   697	      // konnte. Ohne die Zeile ist derselbe Wert eine Sackgasse: wer irgendwann
+   698	      // einmal auf SPARSAM getippt hat - oder wen die Notbremse aus einer der
+   699	      // vier Runden dort abgelegt hat -, saehe VOLL nie wieder und haette
+   700	      // keinen Weg zurueck. Genau das darf das Verschwinden eines Menues nicht
+   701	      // anrichten.
+   702	      //
+   703	      // Also einmal alles zurueck auf Anfang. Ab jetzt setzt `save.gfx` nur
+   704	      // noch, wer das Entwicklermenue geoeffnet hat (Diagnose -> Stufe) - und
+   705	      // wer das tut, weiss, was er tut und kommt auch wieder heraus.
+   706	      if (!sv.gfxR6) {
+   707	        sv.gfxR6 = 1;
+   708	        delete sv.gfx;
+   709	        delete sv.gfxAuto;
+   710	        delete sv.gfxAutoNull;
+   711	      }
+   712	      if (typeof saveGame === "function") saveGame();
+   713	    } catch (e) {}
+   714	  },
+   715	
+   716	  // Welche Stufe gilt beim Start? Erst der Schalter in der URL, dann die
+   717	  // Einstellung des Spielers, dann das, was die Notbremse beim letzten Mal
+   718	  // gefunden hat. Genau einmal, danach entscheidet setTier().
+   719	  _pickTier() {
+   720	    if (this._picked) return;
+   721	    this._picked = true;
+   722	    this._raeumRunde12();
+   723	    this._leseDiag();
+   724	    const w = new URLSearchParams(location.search).get("welt");
+   725	    const wd = new URLSearchParams(location.search).get("weltdpr");
+   726	    if (wd) this._dprFest = Math.max(1, Math.min(3, parseFloat(wd) || 0)) || null;
+   727	    if (w === "roh") { this.roh = true; this.fest = true; return; }
+   728	    if (w === "c2d") { this.tier = 0; this.fest = true; return; }
+   729	    if (w === "0" || w === "1" || w === "2" || w === "3") { this.tier = +w; this.fest = true; return; }
+   730	    const sv = typeof save !== "undefined" ? save : null;
+   731	    if (sv && typeof sv.gfx === "number") { this.tier = sv.gfx; this.fest = true; return; }
+   732	
+   733	    // ============ Runde 3 zurueckgenommen (#107, Runde 4) ============
+   734	    //
+   735	    // Hier stand: auf einem TELEFON startet das Spiel in Canvas 2D. Das war
+   736	    // die richtige Entscheidung mit dem Wissen von Runde 3 und die falsche
+   737	    // mit dem von Runde 4.
+   738	    //
+   739	    // Runde 3 schrieb an dieser Stelle, was der Hybrid je Bild zusaetzlich
+   740	    // tut, und nannte es "Architektur und keine Messung, und damit das
+   741	    // Einzige, was sich auf fremde Hardware uebertragen laesst". Der Satz war
+   742	    // richtig — nur ist daraus nie eine Zahl geworden. Runde 4 hat die Zahlen
+   743	    // geholt, und sie zeigen zwei Posten, die beide behebbar waren:
+   744	    //
+   745	    //   Vollbild-Upload   11,85 MB je Bild bei 1170x2532. Der Posten, den
+   746	    //                     Dustin auf seinem Geraet hochschnellen sieht.
+   747	    //                     Behoben: die Welt-Ebene ist auf 2x gedeckelt
+   748	    //                     (baseDpr), die Oberflaeche bleibt bei 3x. 5,27 MB.
+   749	    //   Zeichenbefehle    4500-6700 je Bild, davon 40 % Fische. DAS ist auch
+   750	    //                     der Grund, warum Canvas 2D bei Dustin ebenfalls nur
+   751	    //                     30 Bilder schaffte — der Posten gehoert gar nicht
+   752	    //                     dem Hybrid, sondern der Szene selbst.
+   753	    //                     Behoben: sprites.js, rund ein Drittel weniger.
+   754	    //
+   755	    // Beides zusammen macht den Hybrid auf einem Telefon erst zu dem, was er
+   756	    // sein sollte. Also faengt das Spiel dort wieder mit ihm an. Traegt das
+   757	    // Geraet es doch nicht, geht die Notbremse von selbst herunter — sie darf
+   758	    // seit dieser Runde auch wieder hoch (autoDeckel).
+   759	    //
+   760	    // Was NICHT wiederkommt: die Absenkung auf eine kleinere Stufe bei
+   761	    // hochaufloesenden Displays. Sie hat Effekte weggenommen, um Pixel zu
+   762	    // sparen, und Pixel waren nachweislich nie das Problem.
+   763	    //
+   764	    // Was die Notbremse beim letzten Mal gefunden hat - aber EINE Stufe
+   765	    // versoehnlicher. Sonst haengt ein Spieler fuer immer unten, nur weil
+   766	    // einmal ein Anruf, eine warme Hosentasche oder eine andere App
+   767	    // dazwischenkam.
+   768	    //
+   769	    // NEU in Runde 2: auch die 0 wird verziehen. Vorher war sie eine
+   770	    // Einbahnstrasse - ein einziger schlechter Abschnitt, und der Spieler sah
+   771	    // die Phaser-Ebene nie wieder, auch nicht nach einem Neustart. Genau das
+   772	    // ist Dustin passiert ("ploetzlich sind wir in c2d zurueck, obwohl ich die
+   773	    // Phaser-URL oeffne"). Der Preis eines Versuchs sind 744 KB phaser.js;
+   774	    // deshalb zaehlen wir mit, wie oft die Notbremse schon ganz unten
+   775	    // angekommen ist, und geben nach dem DRITTEN Mal Ruhe. Zweimal probieren
+   776	    // ist fair, dreimal ist Sturheit.
+   777	    if (sv && typeof sv.gfxAuto === "number") {
+   778	      const g = Math.max(0, Math.min(3, sv.gfxAuto));
+   779	      const n = sv.gfxAutoNull || 0;
+   780	      this.tier = g === 0 ? (n >= 3 ? 0 : 1) : Math.min(3, g + 1);
+   781	      return;
+   782	    }
+   783	    // Voreinstellung: die volle Stufe, ueberall. Der Deckel sitzt jetzt auf
+   784	    // der Aufloesung der Welt-Ebene (baseDpr), nicht mehr auf den Effekten.
+   785	    this.tier = 3;
+   786	  },
+   787	
+   788	  // Nach dem ersten Bild aufgerufen (script.js). Laedt phaser.js als eigene
+   789	  // Datei nach - NICHT im Bundle, sonst faehrt terser ueber den UMD-Wrapper
+   790	  // und das HTML verdoppelt sich (SPIKE-PHASER.md, Frage 4).
+   791	  load() {
+   792	    if (this.state !== "aus") return;
+   793	    this._pickTier();
+   794	    // Die Oberflaeche haengt an derselben Tabelle (uiDpr) und wurde beim
+   795	    // allerersten resizeCanvas() noch mit Stufe 3 eingemessen - jetzt steht
+   796	    // die richtige Stufe fest.
+   797	    if (typeof resizeCanvas === "function" && canvasEl.width !== Math.round(window.innerWidth * this.uiDpr())) resizeCanvas();
+   798	    const q = new URLSearchParams(location.search);
+   799	    // Stufe 0 heisst Canvas 2D - dann wird phaser.js gar nicht erst geholt
+   800	    // (744 KB, die niemand braucht).
+   801	    if (this.tier === 0) { this.state = "fehler"; return; }
+   802	    this.state = "laedt";
+   803	    this._script = true;
+   804	    const s = document.createElement("script");
+   805	    s.src = "phaser.js";
+   806	    s.onload = () => {
+   807	      try { this.boot(q); }
+   808	      catch (e) { console.warn("Phaser-Start fehlgeschlagen - Welt bleibt Canvas 2D:", e); this.state = "fehler"; }
+   809	    };
+   810	    s.onerror = () => {
+   811	      // Kein Netz mehr nach dem ersten Bild: das Spiel laeuft in Canvas 2D weiter.
+   812	      console.warn("phaser.js nicht ladbar - Welt bleibt Canvas 2D");
+   813	      this.state = "fehler";
+   814	    };
+   815	    document.head.appendChild(s);
+   816	  },
+   817	
+   818	  // Legt die Leinwand an, in die die Weltszene gezeichnet wird - je nach Pfad
+   819	  // ein OffscreenCanvas (direkt) oder ein DOM-Canvas (kopie/refresh).
+   820	  //
+   821	  // Die Leinwand entsteht mit 2x2 Pixeln und waechst erst NACH dem Anlegen
+   822	  // der Textur auf ihre echte Groesse. Das ist kein Umweg, sondern ein Fund
+   823	  // aus Runde 1 (#107): Phasers CanvasTexture liest im Konstruktor die
+   824	  // ganze Leinwand mit getImageData aus und BEHAELT das Ergebnis. Bei
+   825	  // 1170x2532 sind das ein voller GPU->CPU-Ruecklesevorgang und 11,8 MB, die
+   826	  // danach niemand je anfasst - auf einem Telefon ist beides teuer, und ein
+   827	  // Canvas, von dem zurueckgelesen wird, kann der Browser von der GPU nehmen.
+   828	  // Mit 2x2 kostet derselbe Vorgang vier Pixel.
+   829	  // ============ Die Szene-Leinwand ist UNDURCHSICHTIG (Runde 9) ============
+   830	  // `alpha: false`: der Browser weiss damit, dass hinter jedem Pixel nichts
+   831	  // durchscheint — er spart sich Alpha-Mischung und Prae-Multiplikation auf
+   832	  // einer Leinwand, die ohnehin jedes Bild vollstaendig uebermalt wird
+   833	  // (drawBackground fuellt als Erstes das ganze Bild). Der Shader liest nur
+   834	  // .rgb, unbedeckte Pixel waeren auf beiden Wegen schwarz. Gegenprobe:
+   835	  // ?weltalpha=1 stellt den alten, durchsichtigen Puffer her.
+   836	  _ctxAttr() { return { alpha: !!this._alphaWunsch }; },
+   837	  _makeScene() {
+   838	    if (this.pfad === "direkt" && typeof OffscreenCanvas !== "undefined") {
+   839	      try {
+   840	        this.canvas = new OffscreenCanvas(2, 2);
+   841	        this.ctx = this.canvas.getContext("2d", this._ctxAttr());
+   842	        if (this.ctx) return;
+   843	      } catch (e) {}
+   844	      // Kein OffscreenCanvas (aeltere WebViews): der Kopie-Pfad tut es auch.
+   845	      this.pfad = "kopie";
+   846	    }
+   847	    this.canvas = document.createElement("canvas");
+   848	    this.canvas.width = 2;
+   849	    this.canvas.height = 2;
+   850	    this.ctx = this.canvas.getContext("2d", this._ctxAttr());
+   851	  },
+   852	
+   853	  // ===================== Den Upload-Weg MESSEN, nicht waehlen (#107, R5) ====
+   854	  //
+   855	  // Warum ueberhaupt: siehe den Block bei `pfad`. Kurz - der Unterschied
+   856	  // zwischen den Wegen ist auf einem Entwicklungsrechner unsichtbar (0,1 ms
+   857	  // gegen 0,1 ms) und auf einem Telefon der ganze Unterschied zwischen 19 und
+   858	  // 68 Bildern. Eine Entscheidung, die man am falschen Geraet nicht sehen
+   859	  // kann, darf nicht am falschen Geraet getroffen werden.
+   860	  //
+   861	  // WIE NICHT: der erste Versuch dieser Runde war ein Messstand beim Start -
+   862	  // eigener WebGL-Kontext, zwei Wegwerf-Leinwaende in Bildschirmgroesse, beide
+   863	  // Wege dreimal. Er hat sauber gemessen und das Falsche: `sub` 0,2 ms gegen
+   864	  // `direkt` 0,5 ms, also genau andersherum als im Spiel. Der Grund ist der
+   865	  // Kern der ganzen Sache. Teuer ist nicht der Upload, sondern das
+   866	  // ZURUECKLESEN einer Leinwand, die auf der GPU liegt. Eine frisch angelegte
+   867	  // Leinwand, die nie gezeigt und nie jedes Bild bemalt wurde, liegt aber gar
+   868	  // nicht auf der GPU - der Browser haelt sie im Hauptspeicher, und von dort
+   869	  // ist `texSubImage2D` ein Speicherkopiervorgang und nichts weiter. Der
+   870	  // Messstand hat also einen Fall gemessen, den es im Spiel nicht gibt.
+   871	  //
+   872	  // WIE STATTDESSEN: am laufenden Bild. Die ersten Sekunden im Spiel laufen
+   873	  // ein paar Dutzend Bilder auf dem einen Weg, dann ein paar Dutzend auf dem
+   874	  // anderen, und der Median entscheidet. Das ist die einzige Messung, die den
+   875	  // echten Fall trifft, weil sie DER echte Fall ist. Sie kostet zwei
+   876	  // Umschaltungen (je ein Neuaufbau von Leinwand und Textur) - die liegen
+   877	  // hinter dem Ladebildschirm und sind nicht zu sehen.
+   878	  //
+   879	  // Das Ergebnis wird gemerkt (`save.gfxPfadAB`) und beim naechsten Start
+   880	  // nicht neu gemessen. `?weltab=1` misst noch einmal.
+   881	  AB_WARM: 12,         // Bilder nach dem Umschalten, die nicht zaehlen
+   882	  AB_PROBEN: 30,       // gezaehlte Bilder je Weg
+   883	  _ab: null,
+   884	
+   885	  _abStart() {
+   886	    if (this._pfadFest) return;
+   887	    // Ohne OffscreenCanvas gibt es nichts zu vergleichen - dann bleibt nur `sub`.
+   888	    if (typeof OffscreenCanvas === "undefined") { this.pfad = "sub"; return; }
+   889	    const sv = typeof save !== "undefined" ? save : null;
+   890	    const neu = new URLSearchParams(location.search).get("weltab") === "1";
+   891	    if (!neu && sv && sv.gfxPfadAB && WORLD_PFADE.indexOf(sv.gfxPfadAB.p) >= 0) {
+   892	      this.pfad = sv.gfxPfadAB.p;
+   893	      this.pfadMessung = sv.gfxPfadAB;
+   894	      return;
+   895	    }
+   896	    // Von selbst laeuft die Messung NICHT. Sie kostet zwei Umschaltungen im
+   897	    // Lauf (je ein Neuaufbau von Leinwand und Textur), und ohne einen Befund,
+   898	    // der sie rechtfertigt, ist das ein Ruckler ohne Gegenwert fuer jeden
+   899	    // neuen Spieler. Sie ist ein Werkzeug fuer den Fall, dass der Pruefstand
+   900	    // auf einem Geraet einen Unterschied zwischen den Wegen zeigt.
+   901	    if (!neu) return;
+   902	    this._ab = { reihe: ["direkt", "sub"], i: 0, warm: this.AB_WARM, werte: { direkt: [], sub: [] } };
+   903	    this.pfad = this._ab.reihe[0];
+   904	  },
+   905	
+   906	  // Ein Bild ist durch. `ms` ist, was der Weg zur GPU in diesem Bild gekostet
+   907	  // hat - bei `sub` der eine Aufruf, bei `direkt` Bitmap plus Aufruf.
+   908	  _abProbe(ms) {
+   909	    const ab = this._ab;
+   910	    if (!ab) return;
+   911	    // NUR Bilder der echten Spielszene. Der Ladebildschirm laedt ebenfalls
+   912	    // Welt-Bilder hoch (intro.js), aber seine Szene ist fast leer - und genau
+   913	    // daran ist der erste Anlauf dieser Messung gescheitert: `sub` kostete
+   914	    // dort 0,1 ms und im Spiel 38. Der Rueckleseweg ist eben kein fester
+   915	    // Posten, sondern das Rastern der Szene, die geholt werden muss. Eine
+   916	    // leere Szene macht ihn unsichtbar.
+   917	    if (!this._abOk) return;
+   918	    if (ab.warm > 0) { ab.warm--; return; }
+   919	    const w = ab.werte[this.pfad];
+   920	    if (!w) { this._ab = null; return; }
+   921	    w.push(ms);
+   922	    if (w.length < this.AB_PROBEN) return;
+   923	    ab.i++;
+   924	    if (ab.i < ab.reihe.length) { ab.warm = this.AB_WARM; this._pfadWechsel(ab.reihe[ab.i]); return; }
+   925	
+   926	    const med = (k) => { const s = ab.werte[k].slice().sort((a, b) => a - b); return s[s.length >> 1] || 0; };
+   927	    const d = med("direkt"), s = med("sub");
+   928	    // Gleichstand geht an `direkt`. Er ist der Weg, der die Leinwand nicht
+   929	    // zurueckliest - und das ist der Posten, der auf schwacher Hardware
+   930	    // explodiert, auch wenn er hier gerade nicht auffaellt.
+   931	    const sieger = s < d * 0.8 ? "sub" : "direkt";
+   932	    this._ab = null;
+   933	    this.pfadMessung = { p: sieger, direkt: +d.toFixed(2), sub: +s.toFixed(2) };
+   934	    this._pfadWechsel(sieger);
+   935	    try {
+   936	      if (typeof save !== "undefined" && save) {
+   937	        save.gfxPfadAB = this.pfadMessung;
+   938	        if (typeof saveGame === "function") saveGame();
+   939	      }
+   940	    } catch (e) {}
+   941	  },
+   942	
+   943	  boot(q) {
+   944	    const self = this;
+   945	    this.dpr = this.weltDpr();
+   946	    this._samples = undefined;
+   947	    this._abStart();       // legt den Startweg fest und plant ggf. die Messung
+   948	    this._makeScene();
+   949	
+   950	    // Ebene UNTER dem Spiel-Canvas. Eingaben gehen ausschliesslich ans Spiel.
+   951	    this.holder = document.createElement("div");
+   952	    this.holder.id = "weltEbene";
+   953	    this.holder.style.cssText = "position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;";
+   954	    document.body.insertBefore(this.holder, canvasEl);
+   955	    this._sichtbarkeit();   // steht das Becken schon offen, kommt die Ebene gar nicht erst ins Bild
+   956	    if (getComputedStyle(canvasEl).position === "static") canvasEl.style.position = "relative";
+   957	    canvasEl.style.zIndex = "1";
+   958	
+   959	    // Phaser-Flaeche und Szene-Puffer teilen sich EINE Aufloesung. Unterschiedliche
+   960	    // Groessen heissen entweder Matsch (Puffer kleiner) oder Flimmern (Puffer
+   961	    // groesser, ohne Mipmaps abgetastet).
+   962	    const d3 = this.dpr;
+   963	    this._gameDpr = d3;
+   964	
+   965	    class WeltScene extends Phaser.Scene {
+   966	      constructor() { super("welt"); }
+   967	      create() {
+   968	        self.scene = this;
+   969	        self.tex = this.textures.addCanvas("weltszene", self.canvas);
+   970	        // Eine Orientierung fuer beide Upload-Wege (siehe commit): Zeile 0 der
+   971	        // Szene liegt bei v=0, der Shader tastet mit v = y/H ab.
+   972	        self.tex._source.flipY = false;
+   973	        self.quad = this.add.shader({
+   974	          name: "welt",
+   975	          fragmentSource: WORLD_FRAG,
+   976	          setupUniforms: (set) => self._setUniforms(set)
+   977	        }, 0, 0, window.innerWidth * d3, window.innerHeight * d3, ["weltszene"]);
+   978	        self.quad.setOrigin(0, 0);
+   979	        self.state = "bereit";
+   980	        // phaser.js parsen, booten und das erste Weltbild kosten zusammen ein
+   981	        // paar hundert Millisekunden blockierten Hauptthread. Das ist normal
+   982	        // und einmalig - die Notbremse darf daraus keine Stufe ableiten.
+   983	        if (typeof Perf !== "undefined") Perf.stoer(240);
+   984	        // Jetzt erst auf die echte Groesse - die Textur ist schon angelegt,
+   985	        // der teure getImageData im Konstruktor ist ueber 2x2 gelaufen.
+   986	        self._rebuild(true);
+   987	        // Den Kamera-Filter bereitstellen. Er wird nur eingeschaltet, wenn
+   988	        // jemand ihn verlangt (?weltgpu=1 oder der Pruefstand) - die
+   989	        // ausgelieferte Voreinstellung bleibt der Quad, solange kein
+   990	        // Geraetewert etwas anderes sagt.
+   991	        self._gpuVorbereiten();
+   992	        // Die Szene als GPU-Objekte (gpu.js). Sie braucht nur die Phaser-Szene
+   993	        // und die Aufloesung; alles Weitere gibt der Zeichencode selbst her.
+   994	        if (self.gpuSzene && typeof Gpu !== "undefined") { Gpu.start(this, self.dpr); Gpu.an = true; Gpu.dyn = !!self.dynWeg; }
+   995	        if (self.dynWeg) self._dynAnlegen();
+   996	        else if (self._gpuWunsch || (self.gpuSzene && typeof Gpu !== "undefined" && Gpu.bereit)) self.setGpu(true);
+   997	        self.needsFrame = true;
+   998	      }
+   999	    }
+  1000	
+  1001	    this.game = new Phaser.Game({
+  1002	      type: Phaser.WEBGL,
+  1003	      parent: this.holder,
+  1004	      width: window.innerWidth * d3,
+  1005	      height: window.innerHeight * d3,
+  1006	      zoom: 1 / d3,                       // intern Geraetepixel, aussen CSS-Pixel
+  1007	      scale: { mode: Phaser.Scale.NONE, autoCenter: Phaser.Scale.NO_CENTER },
+  1008	      input: { keyboard: false, mouse: false, touch: false },   // alles gehoert der Oberflaeche
+  1009	      banner: false,
+  1010	      // ============ Der Fund dieser Runde (#107, Runde 2) ============
+  1011	      // Phaser hat ZWEI Schalter, die beide "antialias" heissen, und Runde 1
+  1012	      // hat sie verwechselt:
+  1013	      //
+  1014	      //   antialias    Texturfilter. LINEAR statt NEAREST. DAS ist die
+  1015	      //                Kantenglaettung, die man hier sehen will - sie bleibt an.
+  1016	      //   antialiasGL  Mehrfachabtastung (MSAA) am Standard-Framebuffer.
+  1017	      //                Voreinstellung: AN, also 4 Abtastungen je Pixel.
+  1018	      //
+  1019	      // MSAA glaettet POLYGONKANTEN. Diese Szene hat genau ein Polygon: ein
+  1020	      // bildschirmfuellendes Quad ohne eine einzige sichtbare Kante. MSAA
+  1021	      // liefert hier ein bitgleiches Bild - und kostet trotzdem:
+  1022	      //
+  1023	      //   * vierfacher Farbpuffer  (1170x2532: 47 MB statt 11,8)
+  1024	      //   * vierfacher Tiefen-/Schablonenpuffer (noch einmal 47 MB)
+  1025	      //   * je Bild ein Aufloesungsdurchgang ueber das ganze Bild
+  1026	      //   * auf einer Kachel-GPU (jedes iPhone) das Schlimmste: der Kachel-
+  1027	      //     speicher ist fest. 4 Byte Farbe + 4 Byte Tiefe/Schablone werden zu
+  1028	      //     32 Byte je Pixel - die Kacheln schrumpfen auf ein VIERTEL, es gibt
+  1029	      //     viermal so viele davon, und jede kostet Binning und Aufloesung.
+  1030	      //
+  1031	      // Auf einer 4090 faellt das nicht auf (Runde 1 mass 0,08 ms fuer den
+  1032	      // ganzen Shader). Auf einem A17 Pro ist es genau die Art von Kosten, die
+  1033	      // sich wie zu wenig Bilder anfuehlt, ohne zu ruckeln.
+  1034	      //
+  1035	      // Dazu: `stencil` braucht dieser eine Draw-Call nicht. (`depth` setzt
+  1036	      // Phaser fest auf true, daran kommen wir nicht heran - ohne MSAA ist es
+  1037	      // aber nur noch ein Puffer statt vier.)
+  1038	      //
+  1039	      // Zum Gegenmessen: ?weltmsaa=1 oder Einstellungen -> Diagnose.
+  1040	      antialias: true,
+  1041	      antialiasGL: this.msaa,
+  1042	      stencil: this.msaa,
+  1043	      audio: { noAudio: true },
+  1044	      autoFocus: false,
+  1045	      backgroundColor: "#1c4f6b",
+  1046	      scene: [WeltScene]
+  1047	    });
+  1048	
+  1049	    // Android nimmt der WebView den Kontext beim App-Wechsel weg. Solange er
+  1050	    // fehlt, zeichnet der Rueckfallweg; Phaser baut sich selbst wieder auf.
+  1051	    this.game.canvas.addEventListener("webglcontextlost", () => { self.suspended = true; });
+  1052	    this.game.canvas.addEventListener("webglcontextrestored", () => {
+  1053	      setTimeout(() => { self.suspended = false; self.needsFrame = true; }, 120);
+  1054	    });
+  1055	  },
+  1056	
+  1057	  // Liefert den Zeichenkontext fuer die Weltszene (geleert, DPR gesetzt).
+  1058	  //
+  1059	  // Im GPU-Weg ist das kein Canvas-Kontext mehr, sondern `Gpu.ctx` (gpu.js):
+  1060	  // dieselbe Schnittstelle, aber am anderen Ende stehen Phaser-Objekte statt
+  1061	  // Pixel. Der ganze Zeichencode merkt davon nichts.
+  1062	  begin() {
+  1063	    if ((this.gpu || this.dynWeg) && typeof Gpu !== "undefined" && Gpu.bereit) {
+  1064	      Gpu.rahmenAuf();
+  1065	      return Gpu.ctx;
+  1066	    }
+  1067	    const c = this.ctx;
+  1068	    c.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+  1069	    c.clearRect(0, 0, canvas.width, canvas.height);
+  1070	    return c;
+  1071	  },
+  1072	
+  1073	  // ===================== Der Umschalter (#107, der Umbau) ==================
+  1074	  //
+  1075	  // Es gibt zwei Wege, und beide sind ausgebaut:
+  1076	  //
+  1077	  //   GPU-OBJEKTE (`modus(true)`)  Die Szene liegt als Phaser-Objekte auf der
+  1078	  //     Karte, die Kamera rendert sie, der Wasser-Shader laeuft als
+  1079	  //     KAMERA-FILTER darueber. Je Bild geht nichts ueber den Bus. Das ist der
+  1080	  //     Weg des Angelplatzes und damit der Weg, in dem das Spiel laeuft.
+  1081	  //
+  1082	  //   LEINWAND (`modus(false)`)    Die Szene wird in eine Leinwand gerastert,
+  1083	  //     die Leinwand geht als Textur hoch, ein Vollbild-Quad zeigt sie. Der
+  1084	  //     Weg von vorher. Er bleibt fuer den LADEBILDSCHIRM (intro.js): der malt
+  1085	  //     seine eigene Szene mit Schrift und Uebergabe-Fahrt, und ihn
+  1086	  //     mitzuziehen haette dem Umbau nichts eingebracht - er laeuft 2,6
+  1087	  //     Sekunden und danach nie wieder.
+  1088	  //
+  1089	  // Umgeschaltet wird selten (einmal beim Verlassen des Ladebildschirms).
+  1090	  // Jeder Wechsel legt einen neuen Filter-Controller an - siehe setGpu().
+  1091	  modus(gpu) {
+  1092	    gpu = !!gpu && this.gpuSzene && !this.dynWeg && this.gpuMoeglich
+  1093	       && typeof Gpu !== "undefined" && Gpu.bereit;
+  1094	    if (gpu !== this.gpu) this.setGpu(gpu);
+  1095	    return this.gpu;
+  1096	  },
+  1097	
+  1098	  // Zwischen-Leinwand fuer den KOPIE-Pfad. Auf dem Direkt-Pfad gibt es sie
+  1099	  // nicht - dort ist die Szene-Leinwand schon der OffscreenCanvas.
+  1100	  _makeBlit() {
+  1101	    this.blit = null; this.blitCtx = null;
+  1102	    if (this.pfad !== "kopie") return;
+  1103	    try {
+  1104	      if (typeof OffscreenCanvas !== "undefined") {
+  1105	        this.blit = new OffscreenCanvas(this.canvas.width, this.canvas.height);
+  1106	        this.blitCtx = this.blit.getContext("2d");
+  1107	        // "copy" statt "source-over": der Browser muss den alten Inhalt dann
+  1108	        // nicht erst LESEN, um darauf zu mischen. Bei 2,96 Millionen Pixeln je
+  1109	        // Bild ist das die halbe Arbeit dieses Postens.
+  1110	        this.blitCtx.globalCompositeOperation = "copy";
+  1111	      }
+  1112	    } catch (e) { this.blit = null; this.blitCtx = null; }
+  1113	  },
+  1114	
+  1115	  // Die Szene auf die GPU bringen. Drei Wege, je nach `pfad` - siehe oben.
+  1116	  // Jeder Posten wird EINZELN gemessen, damit auf dem Geraet ablesbar ist,
+  1117	  // welcher es ist (perf.js).
+  1118	  _upload() {
+  1119	    let bmp = null;
+  1120	    const t0 = performance.now();
+  1121	    if (this.pfad === "sub") {
+  1122	      // Der kurze Weg: die Leinwand IST die Quelle. Kein Zwischenbild, keine
+  1123	      // Zuteilung, ein Aufruf. `texSubImage2D` nimmt einen Canvas genauso wie
+  1124	      // ein ImageBitmap (TexImageSource).
+  1125	      //
+  1126	      // Und der teuerste: dieser eine Aufruf muss die Leinwand von der GPU
+  1127	      // zurueckholen. Was hier gemessen wird, ist deshalb nicht "der Upload",
+  1128	      // sondern das Rastern der ganzen Szene plus ein Rueckleseweg.
+  1129	      this._glUpload(this.canvas);
+  1130	      const dt = performance.now() - t0;
+  1131	      Perf.add("upload", dt);
+  1132	      this._abProbe(dt);
+  1133	      return;
+  1134	    }
+  1135	    if (this.pfad === "direkt" && this.canvas.transferToImageBitmap) {
+  1136	      // Kein Zwischenbild: die Szene liegt schon im OffscreenCanvas.
+  1137	      bmp = this.canvas.transferToImageBitmap();
+  1138	      Perf.add("bitmap", performance.now() - t0);
+  1139	    } else if (this.blitCtx) {
+  1140	      this.blitCtx.drawImage(this.canvas, 0, 0);
+  1141	      const t1 = performance.now();
+  1142	      Perf.add("kopie", t1 - t0);
+  1143	      bmp = this.blit.transferToImageBitmap();
+  1144	      Perf.add("bitmap", performance.now() - t1);
+  1145	    } else {
+  1146	      this.tex.refresh();
+  1147	      const dt = performance.now() - t0;
+  1148	      Perf.add("upload", dt);
+  1149	      this._abProbe(dt);
+  1150	      return;
+  1151	    }
+  1152	    const t2 = performance.now();
+  1153	    this._glUpload(bmp);
+  1154	    bmp.close();
+  1155	    Perf.add("upload", performance.now() - t2);
+  1156	    // Fuer die A/B-Messung zaehlt der GANZE Weg zur GPU, nicht der letzte
+  1157	    // Aufruf: bei `direkt` gehoert das Abtreten des Puffers dazu.
+  1158	    this._abProbe(performance.now() - t0);
+  1159	  },
+  1160	
+  1161	  // Der eigentliche Griff an die Textur.
+  1162	  //
+  1163	  // Phasers `glTexture.update()` ruft IMMER `texImage2D` - das legt die Textur
+  1164	  // jedes Bild NEU an. Bei 1170x2532 sind das 11,8 MB Speicher, die je Bild
+  1165	  // beschafft und wieder freigegeben werden, obwohl sich nur der Inhalt
+  1166	  // aendert. `texSubImage2D` schreibt in dieselbe Textur. Gleiche Bytes ueber
+  1167	  // den Bus, aber keine Neuanlage und kein Verwaisen einer Textur, die die GPU
+  1168	  // vielleicht noch liest.
+  1169	  //
+  1170	  // Gebunden wird ueber Phasers eigene Buchhaltung (glTextureUnits/glWrapper),
+  1171	  // damit sein Zustandsmodell nicht auseinanderlaeuft.
+  1172	  // Klemmen und linear filtern - IMMER ausdruecklich, nie aus dem alten Zustand
+  1173	  // der Textur uebernommen. Der Grund ist eine Falle, die uns diese Runde eine
+  1174	  // Stunde gekostet hat (#107):
+  1175	  //
+  1176	  // Die Textur entsteht bei 2x2 Pixeln (der Kniff aus _makeScene), und 2x2 ist
+  1177	  // eine ZWEIERPOTENZ. Phaser setzt fuer Zweierpotenzen `REPEAT`. Danach waechst
+  1178	  // sie auf 1170x2532 - und das ist KEINE Zweierpotenz mehr. Eine NPOT-Textur
+  1179	  // mit REPEAT ist in WebGL 1 unvollstaendig, und eine unvollstaendige Textur
+  1180	  // liefert beim Abtasten SCHWARZ. Kein Fehler, keine Warnung, nur ein
+  1181	  // schwarzes Bild mit intaktem Wasser darueber.
+  1182	  //
+  1183	  // Auf dem DOM-Canvas-Weg faellt das nicht auf: dort laeuft der Umbau ueber
+  1184	  // `updateCanvasTexture`, und das rechnet den Umlaufmodus aus der NEUEN Groesse
+  1185	  // neu aus. Fuer alles andere - und ein OffscreenCanvas ist fuer Phaser
+  1186	  // "alles andere" - nimmt `TextureSource.update()` den alten Modus einfach mit.
+  1187	  // Deshalb setzen wir ihn hier selbst, in beiden Pfaden gleich.
+  1188	  _texParams(gl, w) {
+  1189	    return [gl.CLAMP_TO_EDGE, gl.CLAMP_TO_EDGE, gl.LINEAR, gl.LINEAR, w.format];
+  1190	  },
+  1191	
+  1192	  _glUpload(bmp) {
+  1193	    const w = this.tex._source.glTexture;
+  1194	    const r = this.game.renderer, gl = r.gl;
+  1195	    const passt = this._texBereit && w.width === this.canvas.width && w.height === this.canvas.height;
+  1196	    if (this.teilupload && passt) {
+  1197	      try {
+  1198	        r.glTextureUnits.bind(w, 0, true);
+  1199	        r.glWrapper.updateTexturing({ texturing: { flipY: w.flipY, premultiplyAlpha: w.pma } });
+  1200	        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, w.format, gl.UNSIGNED_BYTE, bmp);
+  1201	        return;
+  1202	      } catch (e) {
+  1203	        // Irgendein WebView mag das nicht: einmal melden, dann fuer immer der
+  1204	        // sichere Weg. Ein Bild kostet das, kein Spiel.
+  1205	        console.warn("Teil-Upload nicht moeglich, zurueck auf den vollen Weg:", e);
+  1206	        this.teilupload = false;
+  1207	      }
+  1208	    }
+  1209	    w.update(bmp, this.canvas.width, this.canvas.height, false, ...this._texParams(gl, w));
+  1210	    this._texBereit = true;
+  1211	  },
+  1212	
+  1213	  // Weltszene hochladen, Uniforms setzen, EINEN Phaser-Frame zeichnen.
+  1214	  // `spielszene` sagt, ob dieses Bild die echte Welt zeigt (script.js) oder den
+  1215	  // Ladebildschirm (intro.js). Nur das erste taugt zum Messen - siehe _abProbe.
+  1216	  // `neu` (Runde 10): wurde die Szene in diesem Bild frisch gezeichnet?
+  1217	  //   true  - rastern und hochladen wie bisher.
+  1218	  //   false - die Textur von vorhin bleibt stehen, der Shader laeuft trotzdem
+  1219	  //           mit frischem `uTime` darueber. Das ist der ganze Takt-Umbau.
+  1220	  // Fehlt das Argument, bleibt es beim alten Verhalten (jedes Bild neu) -
+  1221	  // wichtig, weil intro.js und cutscene.js `commit()` ebenfalls rufen.
+  1222	  commit(profile, spielszene, neu) {
+  1223	    if (!this.active) return;
+  1224	    this._p = profile;
+  1225	    this._abOk = !!spielszene;
+  1226	    if (neu === undefined) neu = true;
+  1227	    try {
+  1228	      if (this.dynWeg && this.dyn && typeof Gpu !== "undefined" && Gpu.bereit) {
+  1229	        // DYN: die Objekte dieses Bildes in die DynamicTexture zeichnen. Das
+  1230	        // ist GPU-Arbeit, kein Upload - hier steht nur das Absetzen der
+  1231	        // Befehle. Unter "Kopie" verbucht, damit "Upload" ehrlich 0 bleibt.
+  1232	        Gpu.rahmenZu();
+  1233	        if (neu && !this.messStopp) {
+  1234	          const tK = performance.now();
+  1235	          this.dyn.clear();
+  1236	          this.dyn.draw(Gpu.aktive());
+  1237	          if (typeof this.dyn.render === "function") this.dyn.render();
+  1238	          Perf.add("kopie", performance.now() - tK);
+  1239	        }
+  1240	      } else if (this.gpu && typeof Gpu !== "undefined" && Gpu.bereit) {
+  1241	        // GPU-Weg: nichts zu rastern, nichts hochzuladen. Nur die Objekte
+  1242	        // schliessen, die dieses Bild niemand mehr gebraucht hat.
+  1243	        Gpu.rahmenZu();
+  1244	      } else if (neu && !this.messStopp) this._upload();   // Pruefstand: siehe script.js
+  1245	      const tS = performance.now();
+  1246	      // Phasers eigene Schleife anhalten - geht erst hier, nicht in create()
+  1247	      // (sonst zeichnet er doppelt; nachgewiesen in tools/sync.js des Spikes).
+  1248	      if (this.game.loop.raf && this.game.loop.raf.isRunning) this.game.loop.stop();
+  1249	      this.game.loop.step(performance.now());
+  1250	      Perf.add("shader", performance.now() - tS);
+  1251	      this.frames++;
+  1252	      this.needsFrame = false;
+  1253	      this._fails = 0;
+  1254	    } catch (e) { this._fail(e); }
+  1255	  },
+  1256	
+  1257	  _fail(e) {
+  1258	    this._fails++;
+  1259	    console.warn("Phaser-Ebene setzt aus (" + this._fails + "):", e);
+  1260	    this.suspended = true;
+  1261	    if (this._fails >= 3) { this.state = "fehler"; this._hide(); return; }
+  1262	    setTimeout(() => { this.suspended = false; this.needsFrame = true; }, 1500);
+  1263	  },
+  1264	
+  1265	  // Beim Abraeumen der Ebene (MSAA-Wechsel, dritter Fehler) verschwindet die
+  1266	  // Szene und mit ihr Image und Controller. Die Verweise muessen mit, sonst
+  1267	  // zeigt setGpu() beim naechsten Mal auf Objekte einer toten Szene.
+  1268	  _gpuVergessen() { this.gpu = false; this.gpuBild = null; this.gpuCtl = null; },
+  1269	
+  1270	  _hide() {
+  1271	    if (typeof Gpu !== "undefined" && Gpu.bereit) Gpu.weg();
+  1272	    if (this.dyn) { try { this.dyn.destroy(); } catch (e) {} this.dyn = null; }
+  1273	    try {
+  1274	      if (this.game) {
+  1275	        this.game.destroy(true);
+  1276	        // Phaser raeumt erst im NAECHSTEN step() auf (Game.step: pendingDestroy).
+  1277	        // Weil unser gameLoop die Schleife taktet und wir sie hier nicht mehr
+  1278	        // takten, muss dieser eine Schritt von Hand kommen - sonst bleiben
+  1279	        // WebGL-Kontext, Textur und Leinwand fuer immer liegen.
+  1280	        this.game.step(performance.now(), 0);
+  1281	      }
+  1282	    } catch (e) {}
+  1283	    if (this.holder && this.holder.parentNode) this.holder.parentNode.removeChild(this.holder);
+  1284	    this.game = this.scene = this.quad = this.tex = this.holder = null;
+  1285	    this._samples = undefined;
+  1286	    this._texBereit = false;
+  1287	  },
+  1288	
+  1289	  resize() {
+  1290	    // resizeCanvas() laeuft bei jedem Ortswechsel: der naechste Frame muss
+  1291	    // gezeichnet werden, AUCH wenn die Welt gerade steht (Werbe-Tor beim
+  1292	    // Aufbruch) - sonst zeigt die Phaser-Ebene noch den alten Ort.
+  1293	    this._rebuild(false);
+  1294	  },
+  1295	
+  1296	  // Puffer, Textur und Phaser-Flaeche auf die aktuelle Aufloesung bringen.
+  1297	  // Ohne `force` passiert nichts, wenn sich nichts geaendert hat: der
+  1298	  // Neuaufbau der Textur kostet einen vollen Ruecklese-Frame, und resize()
+  1299	  // laeuft bei jedem Ortswechsel.
+  1300	  _rebuild(force) {
+  1301	    if (this.state !== "bereit" || !this.game) return;
+  1302	    this.needsFrame = true;
+  1303	    // Stufe 0: die Ebene ist ausgeblendet, ihre Groesse ist bedeutungslos.
+  1304	    // Beim Zurueckschalten wird ohnehin neu eingemessen.
+  1305	    if (this.tier === 0) return;
+  1306	    const d = this.weltDpr();          // Textur: die Szene-Leinwand
+  1307	    const a = this.ausDpr();           // Ausgabe: WebGL-Leinwand und Quad
+  1308	    const w = Math.max(2, Math.round(window.innerWidth * d));
+  1309	    const h = Math.max(2, Math.round(window.innerHeight * d));
+  1310	    if (!force && d === this._gameDpr && a === this._ausAlt && w === this.canvas.width && h === this.canvas.height) return;
+  1311	    this.dpr = d;
+  1312	    this._gameDpr = d;
+  1313	    this._ausAlt = a;
+  1314	    // GPU-Weg: die Objekte liegen direkt auf der Ausgabe, also in DEREN
+  1315	    // Aufloesung - eine Textur gibt es dort nicht.
+  1316	    if (typeof Gpu !== "undefined" && Gpu.bereit) Gpu.D = a;
+  1317	    if (w !== this.canvas.width || h !== this.canvas.height) {
+  1318	      this.canvas.width = w;
+  1319	      this.canvas.height = h;
+  1320	      this._makeBlit();
+  1321	      // Die Textur wird NICHT neu angelegt, nur nachgemessen: `_source.update()`
+  1322	      // laeuft ueber `canvasToTexture`, und das liest die Groesse von der
+  1323	      // Leinwand selbst und baut die GL-Textur passend um. Ein
+  1324	      // `textures.remove()` + `addCanvas()` waere hier ein zweiter
+  1325	      // Vollbild-getImageData - siehe boot().
+  1326	      const src = this.tex._source;
+  1327	      src.width = w;
+  1328	      src.height = h;
+  1329	      src.flipY = false;
+  1330	      this.tex.width = w;
+  1331	      this.tex.height = h;
+  1332	      // Vor dem Nachmessen die Parameter richtigstellen - siehe _texParams():
+  1333	      // `TextureSource.update()` schleppt fuer einen OffscreenCanvas den alten
+  1334	      // REPEAT-Modus der 2x2-Textur mit, und NPOT + REPEAT heisst schwarz.
+  1335	      const gt = src.glTexture, gl2 = this.game.renderer.gl;
+  1336	      if (gt) { gt.wrapS = gt.wrapT = gl2.CLAMP_TO_EDGE; gt.minFilter = gt.magFilter = gl2.LINEAR; }
+  1337	      src.update();
+  1338	      this.quad.setTextures([this.dynWeg ? "weltdyn" : "weltszene"]);
+  1339	      // Nach dem Neuanlegen muss das erste Bild wieder ein voller texImage2D
+  1340	      // sein - texSubImage2D schreibt nur in eine Textur, die es schon gibt.
+  1341	      this._texBereit = false;
+  1342	    }
+  1343	    this.game.scale.resize(window.innerWidth * a, window.innerHeight * a);
+  1344	    this.game.scale.setZoom(1 / a);
+  1345	    this.quad.setSize(window.innerWidth * a, window.innerHeight * a);
+  1346	    if (this.dyn) {
+  1347	      const dw = Math.max(2, Math.round(window.innerWidth * a)), dh = Math.max(2, Math.round(window.innerHeight * a));
+  1348	      if (this.dyn.width !== dw || this.dyn.height !== dh) {
+  1349	        try { this.dyn.setSize(dw, dh); } catch (e) { console.warn("DynamicTexture: setSize", e); }
+  1350	        this.quad.setTextures(["weltdyn"]);
+  1351	      }
+  1352	    }
+  1353	    // Das Zwischen-Image des Filterwegs haengt an derselben Groesse wie der
+  1354	    // Quad. Wird es vergessen, zeigt der Filter nach einem Ortswechsel eine
+  1355	    // Szene in der alten Aufloesung - und der Shader rechnet mit der neuen.
+  1356	    if (this.gpuBild) this.gpuBild.setDisplaySize(window.innerWidth * a, window.innerHeight * a);
+  1357	  },
+  1358	
+  1359	  // Pfad im laufenden Spiel wechseln. Die Szene-Leinwand ist eine andere
+  1360	  // (DOM-Canvas vs. OffscreenCanvas), also muss auch die Textur neu auf sie
+  1361	  // zeigen - mit dem 2x2-Kniff aus _makeScene(), sonst kostet das Umhaengen
+  1362	  // wieder einen Vollbild-getImageData.
+  1363	  setPfad(p) {
+  1364	    if (WORLD_PFADE.indexOf(p) < 0 || p === this.pfad) return;
+  1365	    this._pfadFest = true;      // eine Wahl von Hand ueberlebt den Neustart
+  1366	    this._ab = null;            // und beendet eine laufende Messung
+  1367	    this._pfadWechsel(p);
+  1368	    this.merkeDiag();
+  1369	  },
+  1370	
+  1371	  // Derselbe Wechsel ohne die Nebenwirkungen von `setPfad`: er merkt sich
+  1372	  // nichts und macht den Weg nicht fest. Genau das braucht die A/B-Messung,
+  1373	  // die im Lauf zweimal umschaltet und sich erst am Ende festlegt.
+  1374	  _pfadWechsel(p) {
+  1375	    if (WORLD_PFADE.indexOf(p) < 0 || p === this.pfad) return;
+  1376	    this.pfad = p;
+  1377	    if (typeof Perf !== "undefined") Perf.stoer(120);
+  1378	    if (this.state === "bereit" && this.scene && this.tex) {
+  1379	      try {
+  1380	        this._makeScene();
+  1381	        this.scene.textures.remove("weltszene");
+  1382	        this.tex = this.scene.textures.addCanvas("weltszene", this.canvas);
+  1383	        this.tex._source.flipY = false;
+  1384	        // Die Textur ist eine NEUE - das Zwischen-Image des Filterwegs zeigt
+  1385	        // sonst weiter auf die alte, die es gleich nicht mehr gibt.
+  1386	        if (this.gpuBild) this.gpuBild.setTexture("weltszene");
+  1387	        this._texBereit = false;
+  1388	        this._gameDpr = -1;              // _rebuild soll wirklich neu einmessen
+  1389	        this._rebuild(true);
+  1390	      } catch (e) { this._fail(e); }
+  1391	    }
+  1392	  },
+  1393	
+  1394	  // MSAA laesst sich nur beim Anlegen des Kontexts bestimmen. Also: Ebene
+  1395	  // abraeumen und neu hochfahren - phaser.js ist da, das kostet keinen Download.
+  1396	  setMsaa(an) {
+  1397	    if (!!an === this.msaa) return;
+  1398	    this.msaa = !!an;
+  1399	    if (typeof Perf !== "undefined") Perf.stoer(240);
+  1400	    this.merkeDiag();
+  1401	    if (this.state !== "bereit") return;
+  1402	    const q = new URLSearchParams(location.search);
+  1403	    this._hide();
+  1404	    this._gpuVergessen();
+  1405	    this.state = "aus";
+  1406	    this._texBereit = false;
+  1407	    this.suspended = false;
+  1408	    try { this.boot(q); this.needsFrame = true; }
+  1409	    catch (e) { console.warn("Neustart der Welt-Ebene fehlgeschlagen:", e); this.state = "fehler"; }
+  1410	  },
+  1411	
+  1412	  // ===================== Der Weg ohne Upload (#107, Runde 6) ==================
+  1413	  //
+  1414	  // WORUM ES GEHT
+  1415	  //
+  1416	  // Heute laeuft der Wasser-Shader als EIN Vollbild-Quad, das die Weltszene aus
+  1417	  // einer jedes Bild hochgeladenen Leinwand liest. Der Umbau, auf den alles
+  1418	  // zulaeuft, dreht das um: die Szene liegt als Phaser-Objekte auf der GPU, die
+  1419	  // Kamera rendert sie in einen Framebuffer, und der Wasser-Shader laeuft als
+  1420	  // KAMERA-FILTER darueber. Dann geht je Bild nichts mehr ueber den Bus.
+  1421	  //
+  1422	  // WAS HIER SCHON DRIN IST, UND WAS NOCH NICHT
+  1423	  //
+  1424	  // Drin ist die HALBE Kette: der Filter. Der Szeneninhalt ist einstweilen noch
+  1425	  // ein einziges Phaser-Image, das dieselbe hochgeladene Leinwand zeigt wie
+  1426	  // vorher. Dieser Zustand ist deshalb NICHT schneller als der Quad, sondern
+  1427	  // langsamer - er hat denselben Upload und einen Vollbild-Durchgang mehr.
+  1428	  //
+  1429	  // Das ist Absicht. Genau dieser eine Durchgang ist die Zahl, die dem Umbau
+  1430	  // bisher fehlt. Die Ziel-Bauweise hat ihn unvermeidlich: Objekte werden in
+  1431	  // einen Framebuffer gezeichnet, der Filter liest ihn und schreibt auf den
+  1432	  // Bildschirm. Das ist ein Vollbild-Schreiben und ein Vollbild-Lesen mehr als
+  1433	  // heute. Auf einer Kachel-GPU ist das nicht umsonst, und wie teuer es ist,
+  1434	  // sagt kein Ueberlegen, sondern der Pruefstand:
+  1435	  //
+  1436	  //     3x ohne Upload            was der Umbau bestenfalls erreicht
+  1437	  //     3x Filter statt Quad      was der zusaetzliche Durchgang kostet
+  1438	  //
+  1439	  // Erst die beiden zusammen sind die ehrliche Obergrenze des Umbaus.
+  1440	  //
+  1441	  // WAS DIE PROBE ERGEBEN HAT (hier, am laufenden Spiel)
+  1442	  //
+  1443	  // Der Shader braucht KEINE EINZIGE Aenderung. WORLD_FRAG laeuft als
+  1444	  // Kamera-Filter Zeile fuer Zeile so, wie er als Quad laeuft: `uMainSampler`
+  1445	  // ist die Bezeichnung, die BaseFilterShader ohnehin auf Einheit 0 legt,
+  1446	  // `outTexCoord` liefert Phasers Filter-Vertexshader, und die Orientierung
+  1447	  // stimmt von selbst - ein Image mit `flipY = false` landet im Framebuffer
+  1448	  // genau so herum, wie der Shader es erwartet. Brechung, Spiegelung, Kaustik,
+  1449	  // Glitzern, Truebung, Vignette: im Bild nicht von der Quad-Fassung zu
+  1450	  // unterscheiden.
+  1451	  //
+  1452	  // WAS PHASER 4.2.1 IN UNSEREM GETREESHAKTEN BUENDEL HERGIBT
+  1453	  //
+  1454	  //   ja    Filters.Controller, camera.filters.internal/external, die
+  1455	  //         Render-Node-Klasse BaseFilterShader (ueber die Registrierung des
+  1456	  //         Renderers erreichbar), GameObjects: Image, Graphics, Layer, Shader
+  1457	  //   nein  Sprite, Container, RenderTexture, Partikel, TileSprite
+  1458	  //
+  1459	  // Fuer diesen Schritt reicht das vollstaendig. Fuer die Szene als echte
+  1460	  // Objekte fehlt Container (Gruppen mit gemeinsamer Transformation) - dann
+  1461	  // braucht es den vollen Build.
+  1462	  //
+  1463	  // WARUM DER ZUGRIFF UEBER `_nodeConstructors` GEHT
+  1464	  //
+  1465	  // Phaser 4 baut einen eigenen Filter aus zwei Teilen: einem Controller (das
+  1466	  // ist oeffentlich) und einer Render-Node, die den Shader haelt. Die Basis
+  1467	  // dieser Node - BaseFilterShader - exportiert unser Buendel nicht nach
+  1468	  // aussen; sie steht aber in der Konstruktoren-Liste des Renderers, und von
+  1469	  // dort holen wir sie. Das ist ein Griff an eine interne Stelle, und er ist
+  1470	  // entsprechend abgesichert: faellt er aus, bleibt es beim Quad und das Spiel
+  1471	  // merkt nichts.
+  1472	  WELT_FILTER: "FilterWelt",
+  1473	  gpu: false,          // laeuft die Szene ueber den Kamera-Filter?
+  1474	  gpuMoeglich: false,  // hat sich der Filter ueberhaupt bauen lassen?
+  1475	  gpuBild: null,
+  1476	  gpuCtl: null,
+  1477	  _gpuWunsch: false,   // ?weltgpu=1: gleich beim Start einschalten
+  1478	
+  1479	  _gpuVorbereiten() {
+  1480	    this.gpuMoeglich = false;
+  1481	    try {
+  1482	      const rn = this.game && this.game.renderer && this.game.renderer.renderNodes;
+  1483	      const Base = rn && rn._nodeConstructors && rn._nodeConstructors.BaseFilterShader;
+  1484	      if (!Base || typeof Phaser === "undefined" || !Phaser.Filters || !Phaser.Filters.Controller) return;
+  1485	      const self = this;
+  1486	      if (!rn._nodeConstructors[this.WELT_FILTER]) {
+  1487	        // Kein `class extends`: Base ist eine Funktion aus einem fremden
+  1488	        // Buendel, und `super()` darauf ist nicht garantiert.
+  1489	        const Node = function (manager) { Base.call(this, self.WELT_FILTER, manager, null, WORLD_FRAG); };
+  1490	        Node.prototype = Object.create(Base.prototype);
+  1491	        Node.prototype.constructor = Node;
+  1492	        // Dieselbe Quelle wie beim Quad - die Uniforms stehen genau einmal im
+  1493	        // Projekt (_setUniforms), damit die beiden Wege nicht auseinanderlaufen.
+  1494	        Node.prototype.setupUniforms = function () {
+  1495	          const pm = this.programManager;
+  1496	          self._setUniforms((k, v) => pm.setUniform(k, v));
+  1497	        };
+  1498	        rn.addNodeConstructor(this.WELT_FILTER, Node);
+  1499	      }
+  1500	      this.gpuMoeglich = true;
+  1501	    } catch (e) {
+  1502	      console.warn("Kamera-Filter nicht baubar - die Welt bleibt beim Quad:", e);
+  1503	    }
+  1504	  },
+  1505	
+  1506	  // DYN anlegen: eine DynamicTexture in Ausgabegroesse, der Quad zeigt sie.
+  1507	  // Die Objekte aus gpu.js werden je Bild hineingezeichnet (commit) und von
+  1508	  // der Hauptkamera ignoriert (gpu.js: _ignorieren).
+  1509	  _dynAnlegen() {
+  1510	    try {
+  1511	      const a = this.ausDpr();
+  1512	      const w = Math.max(2, Math.round(window.innerWidth * a)), h = Math.max(2, Math.round(window.innerHeight * a));
+  1513	      this.dyn = this.scene.textures.addDynamicTexture("weltdyn", w, h);
+  1514	      if (!this.dyn) throw new Error("addDynamicTexture lieferte nichts");
+  1515	      this.quad.setTextures(["weltdyn"]);
+  1516	      this.quad.setVisible(true);
+  1517	      this.gpu = false;
+  1518	    } catch (e) {
+  1519	      console.warn("DYN-Weg nicht baubar, zurueck zum Kamera-Filter:", e);
+  1520	      this.dynWeg = false; this.dyn = null;
+  1521	      if (typeof Gpu !== "undefined") Gpu.dyn = false;
+  1522	      this.setGpu(true);
+  1523	    }
+  1524	  },
+  1525	
+  1526	  // Zwischen Quad und Kamera-Filter umschalten. Beide Wege zeigen dieselbe
+  1527	  // Szene und benutzen denselben Shader; sie unterscheiden sich nur darin, wie
+  1528	  // das Bild auf den Bildschirm kommt.
+  1529	  setGpu(an) {
+  1530	    an = !!an && this.gpuMoeglich && this.state === "bereit";
+  1531	    if (an === this.gpu) return;
+  1532	    try {
+  1533	      const cam = this.scene.cameras.main;
+  1534	      if (an) {
+  1535	        // Der Umbau (gpu.js): der Szeneninhalt sind Phaser-Objekte. Dann
+  1536	        // braucht es KEIN Zwischen-Image mehr - das war der Zustand von
+  1537	        // Runde 6, in dem der Filter schon lief, aber ueber einer weiterhin
+  1538	        // hochgeladenen Leinwand.
+  1539	        if (this.gpuSzene && typeof Gpu !== "undefined" && Gpu.bereit) {
+  1540	          if (this.gpuBild) this.gpuBild.setVisible(false);
+  1541	        } else {
+  1542	          if (!this.gpuBild) {
+  1543	            this.gpuBild = this.scene.add.image(0, 0, "weltszene").setOrigin(0, 0);
+  1544	            this.gpuBild.setDepth(-1e6);
+  1545	          }
+  1546	          this.gpuBild.setTexture("weltszene");
+  1547	          this.gpuBild.setVisible(true);
+  1548	        }
+  1549	        this.quad.setVisible(false);
+  1550	        // JEDES MAL ein neuer Controller. Phasers `FilterList.remove()` ruft
+  1551	        // `destroy()` auf dem Controller auf, und ein zerstoerter Controller
+  1552	        // steht danach zwar noch in der Liste, ist aber nicht mehr aktiv -
+  1553	        // `getActive()` uebergeht ihn, der Filter laeuft nicht mehr, und zu
+  1554	        // sehen ist die nackte Szene. Nichts meldet das: kein Fehler, keine
+  1555	        // Warnung, nur ein Bild ohne Wasser (und auf dem Kopf, weil der
+  1556	        // Filter-Durchgang auch die Orientierung dreht). Genau so ist es beim
+  1557	        // ersten Einbau passiert - der Pruefstand schaltet je Zeile ab und
+  1558	        // wieder an, und ab der zweiten Zeile war der Filter tot.
+  1559	        this.gpuCtl = new Phaser.Filters.Controller(cam, this.WELT_FILTER);
+  1560	        cam.filters.internal.add(this.gpuCtl);
+  1561	      } else {
+  1562	        if (this.gpuCtl) { try { cam.filters.internal.remove(this.gpuCtl); } catch (e) { cam.filters.internal.clear(); } }
+  1563	        this.gpuCtl = null;
+  1564	        if (this.gpuBild) this.gpuBild.setVisible(false);
+  1565	        if (typeof Gpu !== "undefined" && Gpu.bereit) Gpu.leeren();
+  1566	        this.quad.setVisible(true);
+  1567	      }
+  1568	      this.gpu = an;
+  1569	      if (typeof Perf !== "undefined") Perf.stoer(120);
+  1570	      this._rebuild(true);
+  1571	      this.needsFrame = true;
+  1572	    } catch (e) {
+  1573	      console.warn("Umschalten auf den Kamera-Filter fehlgeschlagen:", e);
+  1574	      try { this.quad.setVisible(true); } catch (e2) {}
+  1575	      this.gpu = false;
+  1576	    }
+  1577	  },
+  1578	
+  1579	  _setUniforms(set) {
+  1580	    const p = this._p;
+  1581	    if (!p) return;
+  1582	    // Diagnose: einzelne Effekte stumm schalten. Das laeuft ueber die
+  1583	    // vorhandenen Uniforms statt ueber neue Shader-Zweige - so misst man
+  1584	    // wirklich den Effekt und nicht eine zusaetzliche Verzweigung (#107).
+  1585	    const a = this.aus;
+  1586	    const fx1 = [a.brechung ? 0 : p.fx1[0], a.kaustik ? 0 : p.fx1[1],
+  1587	                 a.spiegel ? 0 : p.fx1[2], a.glitzer ? 0 : p.fx1[3]];
+  1588	    const fx2 = [a.truebung ? 0 : p.fx2[0], p.fx2[1], p.fx2[2], p.fx2[3]];
+  1589	    set("uRes", [canvas.width, canvas.height]);
+  1590	    // Woher kommt die Szene? Ein Kamera-Framebuffer liegt auf dem Kopf, eine
+  1591	    // hochgeladene Leinwand nicht (world-frag.js: uFlipV).
+  1592	    set("uFlipV", this.dynWeg ? this._dynFlip : ((this.gpu && typeof Gpu !== "undefined" && Gpu.bereit) ? 1 : 0));
+  1593	    set("uTime", p.time);
+  1594	    set("uHorizon", p.horizon);
+  1595	    set("uWaveA", p.waveA);
+  1596	    set("uWaveB", p.waveB);
+  1597	    set("uLight", p.light);
+  1598	    set("uWTop", p.wTop);
+  1599	    set("uWBot", p.wBot);
+  1600	    set("uSun", p.sun);
+  1601	    set("uFx1", fx1);
+  1602	    set("uFx2", fx2);
+  1603	    set("uCam", p.cam);
+  1604	    set("uShake", p.shake);
+  1605	    set("uLid", p.lid || 0);
+  1606	    // Leistungsstufe: x = Bloom-Ringe (0/1/2), y = Kaustik-Oktaven (1/2).
+  1607	    // Beide Zweige im Shader haengen an EINEM Uniform - der Sprung ist fuer
+  1608	    // alle Pixel gleich, also billig, auch auf einer Handy-GPU.
+  1609	    const st = this.stufe;
+  1610	    set("uBloom", (st.ringe && !a.bloom) ? (p.bloom || 0) : 0);
+  1611	    // z = ROH: Szene 1:1 durchreichen. Messgeraet, kein Aussehen (#107).
+  1612	    // y: Kaustik-Oktaven; `schnee` nimmt in der Tiefsee die zweite Flockenebene.
+  1613	    set("uQual", [a.bloom ? 0 : st.ringe, a.schnee ? 1 : st.oktaven, this.roh ? 1 : 0]);
+  1614	  },
+  1615	
+  1616	  // Was gerade wirklich laeuft - fuer die Anzeige auf dem Geraet (perf.js).
+  1617	  // Die MSAA-Zahl kommt aus dem Treiber, nicht aus unserer Absicht: nur so
+  1618	  // sieht Dustin, ob der Schalter auf seinem Geraet ueberhaupt gegriffen hat.
+  1619	  samples() {
+  1620	    try {
+  1621	      const gl = this.game && this.game.renderer && this.game.renderer.gl;
+  1622	      if (!gl) return -1;
+  1623	      if (this._samples === undefined) this._samples = gl.getParameter(gl.SAMPLES);
+  1624	      return this._samples;
+  1625	    } catch (e) { return -1; }
+  1626	  }
+  1627	};
+  1628	
+  1629	function rgb01(col) { const c = hexToRgb(col); return [c[0] / 255, c[1] / 255, c[2] / 255]; }
+  1630	
+  1631	// Shader-Profil der Spielszene (der Angelplatz; der Ladebildschirm baut in
+  1632	// intro.js sein eigenes). Dieselben Zahlen wie getWave (script.js:132).
+  1633	function worldGameProfile() {
+  1634	  const pal = getPalette(dayTime);
+  1635	  const loc = getLocation();
+  1636	  const P = WATER_PROFILES[loc.id] || WATER_PROFILES.see;
+  1637	  const hz = (typeof hypeZoom === "function" ? hypeZoom() : null) || { x: 0, y: 0, k: 1 };
+  1638	  const sunOn = sunVisible && pal.light > 0.25;
+  1639	  const srcX = sunOn ? sunX : moonX, srcY = sunOn ? sunY : moonY;
+  1640	  // Regen: die Wolkendecke nimmt der Sonne Glitzern und Lichtschaechte
+  1641	  // und dem Wasser einen Teil der Kaustik (#104) — rein visuell.
+  1642	  const g = typeof weatherGloom === "function" ? weatherGloom() : 0;
+  1643	  // Mond: kraeftigeres Glitzern (die silberne Lichtbahn auf dem Wasser) -
+  1644	  // Lichtschaechte wirft er nicht, das regelt der Shader ueber die Schwelle
+  1645	  const strength = (sunOn ? pal.light : (moonVisible ? 0.42 : 0)) * (1 - g * 0.8);
+  1646	  return {
+  1647	    horizon: horizonY,
+  1648	    waveA: [10, 1 / 25, 2, 0],
+  1649	    waveB: [4, 1 / 90, -0.7, 0],
+  1650	    time: time,
+  1651	    light: pal.light * (1 - g * 0.45),
+  1652	    wTop: rgb01(pal.wTop),
+  1653	    wBot: rgb01(pal.wBot),
+  1654	    sun: [srcX, srcY, sunRadius, strength],
+  1655	    fx1: [P.refr, P.caust, P.mirror, P.glitz],
+  1656	    fx2: [P.murk, P.foam, P.vig, P.deep || 0],
+  1657	    cam: [hz.x, hz.y, hz.k, 0],
+  1658	    shake: shake > 0.05 ? [rand(-shake, shake), rand(-shake, shake)] : [0, 0],
+  1659	    // Arktis: Wasser-Effekte erst unter der Eisdecke (Unterkante aus drawIce)
+  1660	    lid: loc.mode === "ice" ? dockY + dockHeight * 1.5 : 0,
+  1661	    // Leuchten: nachts und in der Tiefsee deutlich, am Tag zurueckhaltend
+  1662	    bloom: (P.bloom || 0) * (0.5 + (1 - pal.light) * 1.1)
+  1663	  };
+  1664	}
+  1665	
+  1666	// ===================== Parallaxe (#95, gesetzt) =====================
+  1667	// Die Kulissen-Ebenen bewegen sich gegeneinander: was weiter weg ist, folgt
+  1668	// dem Blick staerker. Der "Blick" haengt am Schwimmer (wohin man geworfen
+  1669	// hat) plus einer traegen Eigendrift, damit die Szene auch in Ruhe atmet.
+  1670	// Die Spielebene (Fische, Haken, Steg) bewegt sich NICHT - Tippkoordinaten
+  1671	// bleiben Weltkoordinaten. Laeuft in beiden Renderern (Canvas-Transform).
+  1672	const CAM_MAX = 30;                                   // px, Obergrenze der Drift
+  1673	const PARA_SKY = 0.75, PARA_FAR = 0.45, PARA_NEAR = 0.16;
+  1674	let camX = 0;
+  1675	
+  1676	function updateCamera(dt) {
+  1677	  const busy = gameState === "waiting" || gameState === "biting" || gameState === "reeling" || gameState === "bossfight";
+  1678	  const look = busy ? bobberX : canvas.width / 2;
+  1679	  const target = clamp((look - canvas.width / 2) / (canvas.width / 2), -1, 1) * 22
+  1680	               + Math.sin(time * 0.16) * 7;
+  1681	  camX = lerp(camX, clamp(target, -CAM_MAX, CAM_MAX), Math.min(1, dt * 1.6));
+  1682	}
+  1683	
+  1684	// Zeichnet eine Kulissen-Ebene seitlich versetzt und minimal vergroessert
+  1685	// (die Vergroesserung deckt die Raender, die der Versatz freilegen wuerde).
+  1686	// Anker ist die Wasserlinie, damit die Kulisse auf ihr stehen bleibt.
+  1687	function withParallax(k, fn) {
+  1688	  if (!k) { fn(); return; }
+  1689	  ctx.save();
+  1690	  const s = 1 + (2 * CAM_MAX * Math.abs(k)) / canvas.width;
+  1691	  // ============ Der Versatz rastet auf ganze Geraetepixel ein (#107, R7) ====
+  1692	  //
+  1693	  // Zwei Gruende, und der zweite ist der wichtigere:
+  1694	  //
+  1695	  // 1. GEBACKENE KULISSEN. Ein Motiv vom Blech (blech.js) wird auf einen
+  1696	  //    GANZEN Geraetepixel kopiert; die Unterpixel-Lage backt es mit. Wandert
+  1697	  //    der Versatz stufenlos, wandert die Lage mit, und die Signatur waere
+  1698	  //    jedes Bild eine andere — der Cache wuerde sich totbacken.
+  1699	  // 2. SCHAERFE. Eine Kulisse, die auf halben Pixeln steht, wird beim
+  1700	  //    Zeichnen weichgerechnet. Auf ganzen Pixeln steht sie scharf. Das gilt
+  1701	  //    fuer den gebackenen UND fuer den direkten Weg — das Einrasten macht
+  1702	  //    das Bild also nicht schlechter, sondern besser.
+  1703	  //
+  1704	  // Die Stufe ist ein Geraetepixel, bei 3x also ein Drittel CSS-Pixel. Die
+  1705	  // Drift laeuft ueber Sekunden ueber 60 CSS-Pixel; dass sie das in Schritten
+  1706	  // von 1/3 Pixel tut, ist nicht zu sehen.
+  1707	  const d = ctx.getTransform().a || 1;
+  1708	  const versatz = Math.round(camX * k * d) / d;
+  1709	  ctx.translate(canvas.width / 2 + versatz, horizonY);
+  1710	  ctx.scale(s, s);
+  1711	  ctx.translate(-canvas.width / 2, -horizonY);
+  1712	  fn();
+  1713	  ctx.restore();
+  1714	}

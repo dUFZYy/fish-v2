@@ -1,0 +1,287 @@
+     1	// --- Der Wasser- und Licht-Shader der Phaser-Ebene (world.js) ---
+     2	//
+     3	// Ein Vollbild-Quad, ein Draw-Call. Er bekommt die komplette, von Canvas 2D
+     4	// gezeichnete Weltszene als Textur (uMainSampler) und veredelt sie:
+     5	//
+     6	//   über der Wasserlinie   unverändert durchgereicht (Himmel, Kulisse, Angler)
+     7	//   unter der Wasserlinie  Brechung, Spiegelung, Kaustik-Netz, Beer-Lambert-
+     8	//                          Trübung, Lichtschächte, Plankton, Glitzern, Schaum
+     9	//   Tiefsee                alles ist Wasser: Wabern, Restlicht, Meeresschnee
+    10	//
+    11	// Weil die FISCHE in derselben Textur liegen, wirken Brechung und Trübung auf
+    12	// sie mit — genau die Bedingung aus SPIKE-PHASER.md ("die Szene zieht als ein
+    13	// Stück um"). Und weil die Trübung ein Schleier ÜBER dem Fisch ist statt einer
+    14	// Deckkraft AM Fisch, baut sie den Fehler #48 nicht nach.
+    15	//
+    16	// Die Wellenformel ist parametrisiert (uWaveA/uWaveB), damit derselbe Shader
+    17	// die Spielszene (getWave, script.js) UND den Ladebildschirm (Intro._wave)
+    18	// bedienen kann — nur die Zahlen unterscheiden sich.
+    19	//
+    20	// FALLE aus dem Machbarkeitsnachweis, hier beherzigt: kein `continue` in
+    21	// Shader-Schleifen (machte das gesamte Wasser lautlos schwarz). Nur `if`.
+    22	
+    23	const WORLD_FRAG = `
+    24	#ifdef GL_FRAGMENT_PRECISION_HIGH
+    25	precision highp float;
+    26	#else
+    27	precision mediump float;
+    28	#endif
+    29	
+    30	varying vec2 outTexCoord;
+    31	
+    32	uniform sampler2D uMainSampler; // die Weltszene aus Canvas 2D
+    33	uniform vec2  uRes;      // CSS-Pixel
+    34	uniform float uTime;     // Weltzeit (steht im Menue still)
+    35	uniform float uHorizon;  // Wasserlinie in px
+    36	uniform vec4  uWaveA;    // Amplitude, 1/Laenge, Tempo, (frei)
+    37	uniform vec4  uWaveB;
+    38	uniform float uLight;    // Tageslicht 0..1
+    39	uniform vec3  uWTop;     // Wasserfarbe oben (Palette des Ortes)
+    40	uniform vec3  uWBot;     // Wasserfarbe unten
+    41	uniform vec4  uSun;      // x, y, Radius, Staerke (sichtbar * Licht)
+    42	uniform vec4  uFx1;      // Brechung, Kaustik, Spiegelung, Glitzern
+    43	uniform vec4  uFx2;      // Truebung, Schaum, Vignette, Tiefsee (0/1)
+    44	uniform vec4  uCam;      // Hype-Zoom: cx, cy, Faktor, (frei)
+    45	uniform vec2  uShake;    // Bildschirmwackeln in px
+    46	uniform float uLid;      // Eisdecke: Wasser-Effekte beginnen erst UNTER dieser y-px (0 = keine)
+    47	uniform float uBloom;    // echtes Leuchten: Staerke des additiven Halos
+    48	// Leistungsstufe (#107). EIN Uniform, zwei Zahlen, und jeder Sprung daran ist
+    49	// fuer das ganze Bild gleich - deshalb kostet er auf einer Handy-GPU nichts.
+    50	//   x  Bloom-Ringe:      2 = 12 Abtastungen, 1 = 6, 0 = kein Leuchten
+    51	//   y  Kaustik-Oktaven:  2 = grobes Netz + feines Flirren + Lichtschaechte,
+    52	//                        1 = nur das grobe Netz (und billigere Tiefsee)
+    53	//   z  ROH (0/1):        1 = die Szene wird 1:1 durchgereicht, kein einziger
+    54	//                        Effekt. Das ist kein Aussehen, das ist ein MESSGERAET:
+    55	//                        laeuft es SO fluessig, kosten die Effekte; ruckelt es
+    56	//                        auch dann, ist die Bauweise schuld (Kopie + Upload),
+    57	//                        und dann hilft kein Regler mehr.
+    58	uniform vec3  uQual;
+    59	
+    60	// ===================== Die Orientierung der Quelle (#107, der Umbau) =======
+    61	//
+    62	// Es gibt zwei Quellen fuer die Szene, und sie liegen unterschiedlich herum:
+    63	//
+    64	//   0  eine HOCHGELADENE LEINWAND (world.js, Leinwand-Weg). Ohne FLIP_Y
+    65	//      angelegt, Zeile 0 liegt also bei v = 0 - wie in Canvas 2D.
+    66	//   1  ein KAMERA-FRAMEBUFFER (gpu.js, der Umbau). Der liegt wie jedes
+    67	//      Rendertarget in WebGL auf dem Kopf: Zeile 0 liegt bei v = 1.
+    68	//
+    69	// Ohne diese eine Zahl steht die ganze Welt kopfueber - der Himmel unten, der
+    70	// Angler an der Decke. Genau so sah der erste Lauf des Umbaus aus.
+    71	uniform float uFlipV;
+    72	
+    73	float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+    74	float noise(vec2 p) {
+    75	  vec2 i = floor(p), f = fract(p);
+    76	  f = f * f * (3.0 - 2.0 * f);
+    77	  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+    78	             mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+    79	}
+    80	float fbm(vec2 p) {
+    81	  float v = 0.0, a = 0.5;
+    82	  for (int i = 0; i < 3; i++) { v += a * noise(p); p *= 2.03; a *= 0.5; }
+    83	  return v;
+    84	}
+    85	
+    86	// Dieselbe Form wie getWave (script.js) bzw. Intro._wave (intro.js) - nur die
+    87	// Parameter kommen von aussen.
+    88	float waveY(float x, float ph) {
+    89	  return uHorizon + sin(x * uWaveA.y + uTime * uWaveA.z + ph) * uWaveA.x
+    90	                  + sin(x * uWaveB.y + uTime * uWaveB.z + ph) * uWaveB.x;
+    91	}
+    92	
+    93	// Die Weltszene an einer Pixelposition (y von oben, wie in Canvas 2D).
+    94	// Hochgeladen wird ohne FLIP_Y (world.js), Zeile 0 liegt also bei v = 0.
+    95	vec3 szene(vec2 p) {
+    96	  vec2 uv = clamp(p / uRes, 0.0, 1.0);
+    97	  uv.y = mix(uv.y, 1.0 - uv.y, uFlipV);
+    98	  return texture2D(uMainSampler, uv).rgb;
+    99	}
+   100	
+   101	void main() {
+   102	  // ROH: nur durchreichen. Ein Sampler-Zugriff, sonst nichts - damit misst
+   103	  // dieser Durchgang ausschliesslich Kopie und Upload (#107).
+   104	  if (uQual.z > 0.5) {
+   105	    gl_FragColor = vec4(szene(vec2(outTexCoord.x, 1.0 - outTexCoord.y) * uRes), 1.0);
+   106	    return;
+   107	  }
+   108	  // Bildschirm-Pixel, y von oben
+   109	  vec2 spx = vec2(outTexCoord.x, 1.0 - outTexCoord.y) * uRes;
+   110	  // Hype-Zoom und Wackeln ZURUECKrechnen: alles Weitere passiert in
+   111	  // Welt-Koordinaten, damit Wasserlinie und Effekte auf der Szene sitzen.
+   112	  vec2 px = (spx - uShake - uCam.xy) / max(uCam.z, 0.001) + uCam.xy;
+   113	
+   114	  vec3 col;
+   115	  float wy = waveY(px.x, 0.0);
+   116	
+   117	  if (uFx2.w > 0.5) {
+   118	    // ============================ Tiefsee ============================
+   119	    // Kein Himmel, keine Linie: das ganze Bild ist Wasser.
+   120	    float d = clamp(px.y / uRes.y, 0.0, 1.0);
+   121	    // leises Wabern statt Oberflaechenbrechung
+   122	    vec2 roff = vec2(sin(px.y * 0.031 + uTime * 0.8) + sin(px.y * 0.011 - uTime * 0.35),
+   123	                     cos(px.x * 0.024 - uTime * 0.6)) * 1.7 * uFx1.x;
+   124	    col = szene(px + roff);
+   125	    // Restlicht von oben: ein breiter, weicher Schimmer. Die erste Fassung
+   126	    // hatte hier drei harte Saeulen, die wie Strahlen vom Himmel aussahen
+   127	    // (Dustins Fund) - jetzt nur noch ein leises, breites Atmen.
+   128	    // Sparsame Stufe: eine Rauschebene statt drei (fBm sind drei noise() und
+   129	    // damit zwoelf sin() je Pixel - der teuerste Einzelposten im Tiefsee-Zweig)
+   130	    float shaft = uQual.y > 1.5 ? fbm(vec2(px.x / uRes.x * 2.2 + uTime * 0.05, uTime * 0.1))
+   131	                                : noise(vec2(px.x / uRes.x * 2.2 + uTime * 0.05, uTime * 0.1));
+   132	    col += vec3(0.3, 0.5, 0.7) * (0.35 + 0.65 * shaft) * exp(-d * 4.0) * 0.045;
+   133	    // Beer-Lambert in die Schwaerze - deutlich gedeckelt: man muss mit der
+   134	    // Harpune auf einzelne Fische ZIELEN koennen. Fern heisst hier blasser
+   135	    // (der Restlicht-Schleier kommt von den Fischen selbst, fish.js),
+   136	    // nicht schwarz.
+   137	    col = mix(col, vec3(0.01, 0.028, 0.055), min(0.35, (1.0 - exp(-d * 2.0)) * 0.4 * uFx2.x));
+   138	    // Meeresschnee: zwei Ebenen traege sinkender Flocken
+   139	    for (int i = 0; i < 2; i++) {
+   140	      float fi = float(i);
+   141	      // zweite Ebene nur auf der vollen Stufe - mit if, nicht mit continue
+   142	      // (die FALLE aus dem Kopf dieser Datei)
+   143	      if (i == 0 || uQual.y > 1.5) {
+   144	        float sc = 0.017 + fi * 0.012;
+   145	        vec2 pg = vec2(px.x * sc + fi * 7.3 + sin(uTime * 0.2 + fi) * 0.3,
+   146	                       px.y * sc - uTime * (0.05 + fi * 0.04));
+   147	        vec2 cell = floor(pg);
+   148	        vec2 f = fract(pg) - vec2(hash(cell), hash(cell + 3.7));
+   149	        float fl = exp(-dot(f, f) * 260.0) * step(0.72, hash(cell + 11.0));
+   150	        col += vec3(0.55, 0.72, 0.85) * fl * 0.32;
+   151	      }
+   152	    }
+   153	  } else if (px.y < max(wy, uLid)) {
+   154	    // ================== ueber Wasser (oder auf dem Eis) ==============
+   155	    // Die Arktis friert die Oberflaeche ein: alles bis zur Unterkante der
+   156	    // Eisdecke (uLid) wird unveraendert durchgereicht - sonst "wellt" das
+   157	    // Wasser durch das Eis (Dustins Fund am Zwischenstand).
+   158	    col = szene(px);
+   159	  } else {
+   160	    // ============================= Wasser ============================
+   161	    float d = clamp((px.y - uHorizon) / max(uRes.y - uHorizon, 1.0), 0.0, 1.0);
+   162	    float edge = px.y - wy;
+   163	    // offene Oberflaeche? Unter einer Eisdecke gibt es keine Wellen-Baender
+   164	    // und keinen Schaum - das sind Phaenomene der freien Wasserlinie.
+   165	    float surf = uLid > 1.0 ? 0.0 : 1.0;
+   166	
+   167	    // Brechung: Versatz nach der Neigung der Oberflaeche, dazu traege Wogen
+   168	    // in der Tiefe. Bricht ALLES in der Textur - auch die Fische.
+   169	    // Der HUB: was dicht unter der Oberflaeche liegt, faehrt sichtbar mit
+   170	    // DERSELBEN Welle auf und ab wie die Linie darueber - erst diese
+   171	    // Kopplung macht aus dem Filter eine Oberflaeche ("man merkt, dass
+   172	    // man auf Wasser guckt"). Klingt mit der Tiefe ab, wie Brechung es tut.
+   173	    float slope = (waveY(px.x + 2.0, 0.0) - waveY(px.x - 2.0, 0.0)) * 0.25;
+   174	    float sway = sin(px.y * 0.045 - uTime * 1.1 + sin(px.x * 0.012)) * (0.5 + d);
+   175	    float lift = (uHorizon - wy) * exp(-d * 3.0) * 0.75;
+   176	    vec2 roff = vec2(slope * 14.0 * exp(-d * 2.1) + sway * 0.9,
+   177	                     lift + cos(px.x * 0.02 + uTime * 0.8) * 0.6) * uFx1.x;
+   178	    col = szene(px + roff);
+   179	
+   180	    // Spiegelung von Steg, Boot, Angler und Himmel dicht unter der Linie.
+   181	    // Direkt an der Linie ein schmales, fast blickdichtes Spiegelband:
+   182	    // flach auf Wasser geschaut wird es zum Spiegel (Fresnel), erst mit
+   183	    // steilerem Blick darunter gibt es den Blick nach unten frei.
+   184	    if (uFx1.z > 0.001) {
+   185	      float ra = uFx1.z * (exp(-edge / (uRes.y * 0.05)) * 0.38 + exp(-edge / 13.0) * 0.3);
+   186	      vec2 rp = vec2(px.x + sin(px.y * 0.11 + uTime * 1.9) * 5.0, wy - edge * 1.12 - 2.0);
+   187	      col = mix(col, szene(rp), clamp(ra, 0.0, 0.72));
+   188	    }
+   189	
+   190	    // Die drei Wellen-Baender aus drawWater (draw.js:183), als Formel.
+   191	    // smoothstep statt step: die harten 1-px-Kanten waren als Treppchen
+   192	    // sichtbar (Dustins "pixelig an den Kanten").
+   193	    float bandEnd = smoothstep(72.0, 26.0, px.y - uHorizon) * surf;
+   194	    col = mix(col, uWBot, 0.18 * smoothstep(-0.9, 0.9, px.y - waveY(px.x, 1.7) - 18.0) * bandEnd);
+   195	    col = mix(col, uWTop, 0.25 * smoothstep(-0.9, 0.9, px.y - waveY(px.x, 0.8) - 8.0) * bandEnd);
+   196	    col = mix(col, uWTop, 0.45 * smoothstep(-0.9, 0.9, px.y - wy) * bandEnd);
+   197	
+   198	    // Kaustik: zwei ueberlagerte Lichtnetze (grob traegt, fein flirrt)
+   199	    vec2 cq = vec2(px.x + roff.x * 2.0, px.y) * 0.035;
+   200	    float c1 = sin(cq.x * 1.7 + cq.y * 0.9 + uTime * 0.9);
+   201	    float c2 = sin(cq.x * -1.1 + cq.y * 2.3 - uTime * 0.7);
+   202	    float c3 = sin((cq.x + cq.y) * 1.9 + uTime * 1.3);
+   203	    float cNet = pow(max(0.0, (c1 + c2 + c3) / 3.0), 6.0);
+   204	    float caust = cNet;
+   205	    if (uQual.y > 1.5) {
+   206	      vec2 cf = cq * 2.3;
+   207	      float f1 = sin(cf.x * 1.3 - cf.y * 1.1 - uTime * 1.1);
+   208	      float f2 = sin(cf.x * -0.9 + cf.y * 1.9 + uTime * 0.8);
+   209	      // die feine Oktave flirrt nur DORT, wo das grobe Netz ohnehin hell ist -
+   210	      // frei stehend bildete sie diagonale Streifen (Artefakt, kein Licht)
+   211	      caust += pow(max(0.0, (f1 + f2) / 2.0), 7.0) * 0.7 * smoothstep(0.01, 0.12, cNet);
+   212	    }
+   213	    caust *= exp(-d * 2.6) * uLight * uFx1.y;
+   214	    col += vec3(0.85, 0.95, 1.0) * caust * 0.5;
+   215	
+   216	    // Lichtschaechte von der SONNE, mit wanderndem Rauschen. Nur bei echtem
+   217	    // Tageslicht - der Mond wirft Glitzern, aber keine Schaechte (nachts
+   218	    // standen hier drei fahle Saeulen im Wasser, die nach nichts aussahen).
+   219	    // Unter einer Eisdecke stark gedaempft: dort kommt Licht diffus an.
+   220	    // Auf der sparsamen Stufe fallen sie weg: ein fBm je Pixel (zwoelf sin())
+   221	    // fuer einen Schleier, den man ohne Vergleichsbild nicht vermisst.
+   222	    float shaftOn = smoothstep(0.35, 0.6, uSun.w) * step(1.5, uQual.y);
+   223	    if (shaftOn > 0.01) {
+   224	      float sx = (px.x - uSun.x) / uRes.x;
+   225	      float shaft = fbm(vec2(sx * 6.0 - d * 1.1, uTime * 0.22));
+   226	      col += vec3(1.0, 0.98, 0.88) * smoothstep(0.55, 0.95, shaft)
+   227	             * 0.10 * shaftOn * uSun.w * (1.0 - d * 0.75) * min(uFx1.y, 1.0) * surf;
+   228	    }
+   229	
+   230	    // Truebung: exponentielle Ausloeschung (Beer-Lambert). Der Schleier liegt
+   231	    // ZWISCHEN Betrachter und Fisch - Entfernung ist Diesigkeit, nicht
+   232	    // Durchsichtigkeit (#48).
+   233	    float turb = 1.0 - exp(-d * 1.9 * uFx2.x);
+   234	    col = mix(col, uWBot * 0.55, turb * 0.55);
+   235	
+   236	    // Plankton: Punktfeld ohne Draw-Call - vereinzelt, nicht als Rauschen
+   237	    vec2 pg = vec2(px.x * 0.02 + uTime * 0.06, px.y * 0.02);
+   238	    vec2 cell = floor(pg);
+   239	    vec2 f = fract(pg) - vec2(hash(cell), hash(cell + 3.7));
+   240	    float pl = exp(-dot(f, f) * 220.0) * step(0.72, hash(cell + 11.0));
+   241	    col += vec3(0.78, 0.92, 1.0) * pl * 0.35 * (1.0 - d * 0.5) * min(uFx1.y + 0.3, 1.0);
+   242	
+   243	    // Sonnenglitzern knapp unter der Oberflaeche: Streifen, die mit den Wellen
+   244	    // wandern - grob genug, dass es funkelt statt zu rauschen
+   245	    if (uSun.w > 0.02 && uFx1.w > 0.001) {
+   246	      float band = exp(-(px.y - uHorizon) / 80.0);
+   247	      float g = noise(vec2(px.x * 0.055 - uTime * 1.9, px.y * 0.35 + uTime * 0.4));
+   248	      g *= 0.6 + 0.4 * sin(px.x * uWaveA.y + uTime * uWaveA.z);   // an die Wellenkaemme geheftet
+   249	      col += vec3(1.0) * smoothstep(0.62, 0.95, g) * band * 0.5 * uSun.w * uFx1.w
+   250	             * exp(-abs(px.x - uSun.x) / (uRes.x * 0.22));
+   251	    }
+   252	
+   253	    // Schaumlinie, vom Rauschen aufgebrochen statt durchgezogen
+   254	    float foam = smoothstep(2.6, 0.0, edge) * (0.18 + 0.30 * uLight) * uFx2.y * surf;
+   255	    foam *= 0.55 + 0.45 * noise(vec2(px.x * 0.08 - uTime * 1.4, uTime * 0.5));
+   256	    col += vec3(1.0) * foam;
+   257	  }
+   258	
+   259	  // ======================= echtes Leuchten =========================
+   260	  // Additiver Halo um alles, was heller ist als die Schwelle: die
+   261	  // Leuchtangel des Anglerfischs, Neonfische, Mond, Sonne, Korallen.
+   262	  // 12 Abtastungen auf zwei Ringen, direkt aus der Szenentextur - ein
+   263	  // Pass, kein Zwischenpuffer, und damit auch beim Kontextverlust simpel.
+   264	  // Auf der mittleren Stufe bleibt nur der INNERE Ring (6 Abtastungen). Der
+   265	  // aeussere traegt den weichen Ausklang bei; ohne ihn ist der Halo enger,
+   266	  // aber er ist da. Deshalb wird der innere staerker gewichtet.
+   267	  if (uBloom > 0.005 && uQual.x > 0.5) {
+   268	    vec3 halo = vec3(0.0);
+   269	    float w1 = uQual.x > 1.5 ? 1.0 : 1.5;
+   270	    for (int i = 0; i < 6; i++) {
+   271	      float a = float(i) * 1.0471976;                    // 60 Grad
+   272	      vec2 dir = vec2(cos(a), sin(a));
+   273	      halo += max(vec3(0.0), szene(px + dir * 5.0) - 0.66) * w1;
+   274	      if (uQual.x > 1.5) {
+   275	        halo += max(vec3(0.0), szene(px + vec2(cos(a + 0.5236), sin(a + 0.5236)) * 12.0) - 0.66) * 0.65;
+   276	      }
+   277	    }
+   278	    col += halo * (uBloom / 4.5);
+   279	  }
+   280	
+   281	  // Vignette (ersetzt die Flaeche aus drawDepthFog)
+   282	  float vig = smoothstep(0.45, 1.0, distance(spx / uRes, vec2(0.5))) * 0.28 * uFx2.z;
+   283	  col = mix(col, vec3(0.0, 0.0, 0.055), vig);
+   284	
+   285	  gl_FragColor = vec4(col, 1.0);
+   286	}
+   287	`;
