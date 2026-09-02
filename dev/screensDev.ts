@@ -79,9 +79,13 @@ function sampleShopData() {
 function sampleQuestsData() {
   const save = ensureQuests(defaultSave());
   const quests = save.quests!;
-  // Give the sample some visual variety: first quest half-done, second done.
-  quests.list[0] && (quests.list[0] = { ...quests.list[0], progress: Math.max(1, Math.floor(quests.list[0].target / 2)) });
-  quests.list[1] && (quests.list[1] = { ...quests.list[1], progress: quests.list[1].target, done: true });
+  // Give the sample some visual variety: first quest partially progressed
+  // (never fully full without also being `done`, or the bar-vs-checkmark
+  // mismatch reads as a bug), second done, third untouched.
+  const q0 = quests.list[0];
+  if (q0) quests.list[0] = { ...q0, progress: q0.target > 1 ? q0.target - 1 : 0 };
+  const q1 = quests.list[1];
+  if (q1) quests.list[1] = { ...q1, progress: q1.target, done: true };
   return { quests, totalCompleted: 42 };
 }
 

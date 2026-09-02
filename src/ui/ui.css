@@ -205,6 +205,12 @@ html, body {
   align-items: center;
   gap: 4px;
   pointer-events: none;
+  /* Toasts must read above an open Sheet (z-index 20) or the catch
+     card/level-up scrim (z-index 30, src/ui/catchCard.ts) — a toast fired
+     while either is open (e.g. "Zu wenig Coins!" from inside the Shop) is
+     otherwise a positioned sibling with no stacking context of its own and
+     paints BELOW them regardless of DOM order. */
+  z-index: 40;
 }
 .hud-toast {
   font: 700 20px 'Baloo 2', 'Segoe UI', system-ui, sans-serif;

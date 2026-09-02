@@ -68,6 +68,13 @@ export class Engine {
     window.visualViewport?.addEventListener('resize', onResize);
     window.addEventListener('orientationchange', () => setTimeout(onResize, 50));
 
+    // Coming back from the background always starts with a huge frame gap
+    // and often a burst of catch-up frames. Neither says anything about how
+    // fast this device is, so the statistics start fresh.
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) this.perf.reset();
+    });
+
     // Main loop. Pixi's ticker drives rendering; we run variable-dt updates
     // clamped to 100 ms so a backgrounded tab does not explode the sim.
     this.app.ticker.maxFPS = 0; // uncapped → follows display refresh (120 Hz on ProMotion)
@@ -119,6 +126,23 @@ export class Engine {
     this.autoAcc = 0;
     const s = this.perf.compute();
     if (s.frames < 120) return;
+
+    // Throttling is not slowness.
+    //
+    // A backgrounded tab, a locked phone or a browser that has decided to
+    // save power all report enormous frame intervals, and an unguarded
+    // auto-tier reads that as "this device cannot cope" and permanently
+    // degrades the game. It happened here during development: the page sat
+    // in the background at 1 fps and quietly dropped itself from 3x to 2x.
+    //
+    // No display runs slower than about 20 fps, so anything past 50 ms per
+    // frame is the environment, not the renderer. Throw the samples away and
+    // start measuring again rather than drawing a conclusion from them.
+    if (document.hidden || s.median > 50) {
+      this.perf.reset();
+      return;
+    }
+
     // Estimate display period from the fastest 5% of frames.
     const budget = Math.max(8.3, Math.min(16.7, s.median));
     if (s.p95 > budget * 1.6) {

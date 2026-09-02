@@ -627,9 +627,9 @@ export class SettingsScreen implements MountableScreen {
 
     const wrap = el('div', 'settings-list');
     wrap.appendChild(this.toggleRow(t('Ton'), data.sfxOn, (v) => this.cb.onSfxToggle?.(v)));
-    wrap.appendChild(this.sliderRow(t('Ton'), data.sfxVolume, (v) => this.cb.onSfxVolume?.(v)));
+    wrap.appendChild(this.sliderRow(trLocal('Ton-Lautstärke', 'SFX volume'), data.sfxVolume, (v) => this.cb.onSfxVolume?.(v)));
     wrap.appendChild(this.toggleRow(t('Musik'), data.musicOn, (v) => this.cb.onMusicToggle?.(v)));
-    wrap.appendChild(this.sliderRow(t('Musik'), data.musicVolume, (v) => this.cb.onMusicVolume?.(v)));
+    wrap.appendChild(this.sliderRow(trLocal('Musik-Lautstärke', 'Music volume'), data.musicVolume, (v) => this.cb.onMusicVolume?.(v)));
     wrap.appendChild(this.sliderRow(trLocal('Umgebung', 'Ambience'), data.ambienceVolume, (v) => this.cb.onAmbienceVolume?.(v)));
     wrap.appendChild(this.langRow(data.lang));
     wrap.appendChild(this.qualityRow(data.quality));

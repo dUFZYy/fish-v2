@@ -43,7 +43,7 @@ export interface SkyState {
  * position and one strength.
  */
 export function skyStateFor(dayTime: number, W: number, H: number, loc: Location): SkyState {
-  const palette = getPalette(dayTime, loc);
+  const palette = getPalette(dayTime, loc, currentGloom);
   const light = palette.light;
 
   const dayUp = dayTime > 0.22 && dayTime < 0.78;
@@ -133,13 +133,28 @@ export function lakeArt(loc: Location): SceneArt {
  * and dusk never occur in the same frame.
  */
 let currentPhase = 0.5;
+/**
+ * Rain gloom, 0..1. It greys the sky and the water without touching `light`
+ * — a rainy day must not make night fish appear, which is why the old game
+ * kept the two separate.
+ */
+let currentGloom = 0;
 
 export function setSkyPhase(dayTime: number): void {
   currentPhase = dayTime;
 }
 
+export function setSkyGloom(gloom: number): void {
+  // Quantised to the same 64 steps as the light: the gloom ramps
+  // continuously, and an unquantised value in a cache key re-bakes the
+  // scenery every frame.
+  currentGloom = Math.round(Math.max(0, Math.min(1, gloom)) * 63) / 63;
+}
+
+export function skyGloomStep(): number { return Math.round(currentGloom * 63); }
+
 function paletteForLight(light: number, loc: Location): Palette {
-  const pal = getPalette(currentPhase, loc);
+  const pal = getPalette(currentPhase, loc, currentGloom);
   // If the caller quantised the light, respect the quantised value: the
   // drawing and the cache key must agree to the last decimal.
   return light === pal.light ? pal : { ...pal, light };

@@ -5,7 +5,8 @@ import { Scene } from '@/world/scene';
 import { Shoal } from '@/world/shoal';
 import { Tackle } from '@/world/tackle';
 import { layout } from '@/engine/layout';
-import { LAKE, lakeArt, makeDock, setSkyPhase, skyStateFor, DAY_SECONDS } from './lake';
+import { LAKE, lakeArt, makeDock, setSkyGloom, setSkyPhase, skyGloomStep, skyStateFor, DAY_SECONDS } from './lake';
+import { Weather } from '@/world/weather';
 import { Session } from './session';
 import { audio } from '@/audio/engine';
 import { sfx, panFor } from '@/audio/sfx';
@@ -41,6 +42,10 @@ export async function startGame(): Promise<void> {
   if (!waterOn) scene.water.mesh.visible = false;
 
   const art = lakeArt(LAKE);
+  // The scenery's cache key must include the gloom step, or a shower would
+  // grey the sky strip and leave the baked hills sunny.
+  const artId = art.id;
+  Object.defineProperty(art, 'id', { get: () => `${artId}:g${skyGloomStep()}` });
   let dayTime = frozenDay ?? 0.42;
   setSkyPhase(dayTime);
   scene.setArt(art, skyStateFor(dayTime, engine.W, engine.H, LAKE).light);
@@ -54,6 +59,7 @@ export async function startGame(): Promise<void> {
   shoal.setLocation(LAKE.id, false);
 
   const tackle = new Tackle(scene);
+  const weather = new Weather(scene, baker.sprites.textureSource, scene.stamps);
 
   // --- the HUD, as small DOM elements over the canvas ---------------------
   const uiHost = document.getElementById('ui')!;
@@ -81,6 +87,8 @@ export async function startGame(): Promise<void> {
       dayTime = (dayTime + dt / DAY_SECONDS) % 1;
       setSkyPhase(dayTime);
     }
+    weather.update(dt, t);
+    setSkyGloom(weather.gloom);
     const sky = skyStateFor(dayTime, engine.W, engine.H, LAKE);
     const wBot = art.waterBottom(sky.light);
 
@@ -155,7 +163,7 @@ export async function startGame(): Promise<void> {
   window.visualViewport?.addEventListener('resize', onResize);
 
   (window as unknown as { __game: unknown }).__game = {
-    scene, shoal, session, tackle, hud, baker, standalone, engine,
+    scene, shoal, session, tackle, hud, weather, baker, standalone, engine,
     /** dev only: freeze the simulation while still rendering, so a still
      *  frame can be captured of a state that only lasts a moment. */
     freeze: (on: boolean) => { engine.app.ticker.speed = on ? 0 : 1; },

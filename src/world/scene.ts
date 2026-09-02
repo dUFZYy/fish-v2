@@ -119,6 +119,8 @@ export class Scene {
 
   private normalFx!: ParticleBatch;
   private additiveFx!: ParticleBatch;
+  /** the four baked shapes every particle system in the game draws from */
+  readonly stamps: ReturnType<typeof bakeStamps>;
   private art: SceneArt | null = null;
   private W = 0;
   private H = 0;
@@ -148,10 +150,11 @@ export class Scene {
     this.water = new WaterOverlay(w, h);
     this.normalFx = new ParticleBatch(atlas, w, h, false);
     this.additiveFx = new ParticleBatch(atlas, w, h, true);
+    this.stamps = bakeStamps(baker);
     this.particles = new Particles(
       this.normalFx,
       this.additiveFx,
-      bakeStamps(baker),
+      this.stamps,
       { waveAt: (x) => this.waveAt(x, 0), ...hooks },
     );
 
