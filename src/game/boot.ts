@@ -11,6 +11,9 @@ import { Session } from './session';
 import { audio } from '@/audio/engine';
 import { sfx, panFor } from '@/audio/sfx';
 import { Hud, type HudState } from '@/ui/hud';
+import { Screens } from '@/ui/screens';
+import { CatchCard, LevelUpPopup } from '@/ui/catchCard';
+import { SPECIES_BY_ID } from '@/data/species';
 
 /**
  * Boot — wiring only.
@@ -61,20 +64,74 @@ export async function startGame(): Promise<void> {
   const tackle = new Tackle(scene);
   const weather = new Weather(scene, baker.sprites.textureSource, scene.stamps);
 
-  // --- the HUD, as small DOM elements over the canvas ---------------------
+  // --- the HUD and the menus, as small DOM elements over the canvas -------
   const uiHost = document.getElementById('ui')!;
+
+  const screens = new Screens(uiHost, {
+    shop: {
+      onBuyOrEquip: (cat, id) => { hud.toast(`${cat}: ${id}`); },
+      onBuyTotem: (id) => { hud.toast(id); },
+    },
+    settings: {
+      onQualityChange: (q) => engine.setQuality(q as never),
+      onMusicVolume: (v: number) => audio.setVolume('music', v),
+      onSfxVolume: (v: number) => audio.setVolume('sfx', v),
+      onAmbienceVolume: (v: number) => audio.setVolume('amb', v),
+      onMusicToggle: (on: boolean) => audio.setVolume('music', on ? 0.5 : 0),
+      onSfxToggle: (on: boolean) => audio.setVolume('sfx', on ? 1 : 0),
+    },
+  });
+  const catchCard = new CatchCard({ onContinue: () => session.onPointerDown(0, 0) });
+  const levelUp = new LevelUpPopup();
+
+  const openScreen = (id: 'dex' | 'shop' | 'quests' | 'settings' | 'achievements') => {
+    const sv = session.save;
+    switch (id) {
+      case 'dex':
+        screens.open({ id, data: { dex: sv.dex, seenSpecies: sv.seenSpecies ?? {}, totalCatches: sv.stats.catches, biggestKg: sv.stats.biggestKg } });
+        break;
+      case 'shop':
+        screens.open({ id, data: { coins: sv.coins, gems: sv.gems, owned: sv.owned, equipped: sv.equipped } });
+        break;
+      case 'quests':
+        screens.open({ id, data: { quests: [], secondsToReset: 0 } as never });
+        break;
+      case 'settings':
+        screens.open({ id, data: { lang: 'de', quality: 'auto', music: audio.getVolume('music'), sfx: audio.getVolume('sfx'), ambience: audio.getVolume('amb'), haptics: true, version: '2.0.0' } as never });
+        break;
+      case 'achievements':
+        screens.open({ id, data: { unlocked: sv.achievements ?? [] } as never });
+        break;
+    }
+  };
+
   const hud = new Hud(uiHost, {
-    onMenu: () => hud.toast('Menü folgt'),
+    onMenu: () => openScreen('settings'),
+    onDex: () => openScreen('dex'),
+    onShop: () => openScreen('shop'),
+    onBonus: () => openScreen('quests'),
   });
 
   // --- the session: the only place a game event becomes a sound ------------
   const session = new Session(scene, shoal, {
     onToast: (text) => hud.toast(text),
     onLost: (text) => hud.toast(text),
-    onCatch: (r, sp) => {
-      hud.toast(`${sp.nameDe} · ${r.kg.toFixed(2)} kg · +${r.coins}`);
+    onCatch: (r, sp, _kg, shiny, perfect) => {
+      const entry = session.save.dex[sp.id];
+      catchCard.show(uiHost, {
+        species: sp,
+        weightKg: r.kg,
+        shiny,
+        perfect,
+        newInDex: !entry || entry.count <= 1,
+        newRecord: !!entry && Math.abs(entry.record - r.kg) < 1e-9,
+        coins: r.coins,
+      });
     },
-    onLevelUp: (lvl, title) => hud.toast(`Stufe ${lvl} — ${title}`),
+    onLevelUp: (lvl, title) => {
+      levelUp.show(uiHost, { level: lvl, title } as never);
+      window.setTimeout(() => levelUp.hide(), 2600);
+    },
   });
 
   // --- ambient life --------------------------------------------------------
@@ -136,6 +193,12 @@ export async function startGame(): Promise<void> {
     });
 
     hud.update(hudStateFrom(session, dayTime));
+
+    // A menu that covers the whole screen means the world behind it is not
+    // visible, and drawing it anyway is exactly the cost the old game paid:
+    // two full-screen surfaces composited every frame, one of them entirely
+    // hidden. Stop rendering the scene while that is true.
+    scene.root.renderable = !screens.coversWorld;
   });
 
   let lookX = 0;
@@ -144,6 +207,8 @@ export async function startGame(): Promise<void> {
   engine.app.stage.eventMode = 'static';
   engine.app.stage.hitArea = { contains: () => true };
   engine.app.stage.on('pointerdown', (e: { global: { x: number; y: number } }) => {
+    if (screens.isOpen) return;          // the sheet has its own input
+    if (catchCard.visible) { catchCard.hide(); session.onPointerDown(0, 0); return; }
     session.onPointerDown(e.global.x, e.global.y);
   });
   engine.app.stage.on('pointerup', () => session.onPointerUp());
@@ -163,7 +228,8 @@ export async function startGame(): Promise<void> {
   window.visualViewport?.addEventListener('resize', onResize);
 
   (window as unknown as { __game: unknown }).__game = {
-    scene, shoal, session, tackle, hud, weather, baker, standalone, engine,
+    scene, shoal, session, tackle, hud, weather, screens, catchCard, baker, standalone, engine,
+    openScreen,
     /** dev only: freeze the simulation while still rendering, so a still
      *  frame can be captured of a state that only lasts a moment. */
     freeze: (on: boolean) => { engine.app.ticker.speed = on ? 0 : 1; },

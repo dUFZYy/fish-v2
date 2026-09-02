@@ -130,24 +130,37 @@ export function drawFarScenery(ctx: CanvasRenderingContext2D, w: number, h: numb
 }
 
 /**
+ * Thickness of the baked ice band, and its top/bottom in FULL-SCREEN
+ * coordinates (matching the convention every far/seabed function in this
+ * file group uses — `h` is always the whole canvas height, never a band's
+ * own height). The ice sits right where a dock/pier would, straddling the
+ * horizon line. Exported so `game/locationsArt.ts` can position the live
+ * hole overlay and the water shader's `lid` at the same seam.
+ */
+export function iceBand(h: number): { top: number; bot: number } {
+  const top = h * HORIZON_FRAC - h * 0.01;
+  return { top, bot: top + h * 0.16 };
+}
+
+/**
  * The ice sheet itself (`drawIce`, locations.js:406, minus the hole — see
- * file header), full width (`w x h`), drawn ABOVE the water pass so it is
+ * file header), full screen (`w x h`), drawn ABOVE the water pass so it is
  * never veiled. Gradient, a gently wavy top edge, the waterline band where
  * it meets the water, and faint crack hatching.
  */
 export function drawNearScenery(ctx: CanvasRenderingContext2D, w: number, h: number, light: number): void {
   void light;
-  const iceTop = 0;
-  const iceBot = h;
+  const { top: iceTop, bot: iceBot } = iceBand(h);
+  const bandH = iceBot - iceTop;
   const g = ctx.createLinearGradient(0, iceTop, 0, iceBot);
   g.addColorStop(0, '#f2f9fd');
   g.addColorStop(0.55, '#e3f0f8');
   g.addColorStop(1, '#c3dbe8');
   ctx.fillStyle = g;
   ctx.beginPath();
-  ctx.moveTo(0, iceTop + h * 0.25);
+  ctx.moveTo(0, iceTop + bandH * 0.25);
   for (let x = 0; x <= w; x += w / 12) {
-    ctx.lineTo(x, iceTop + h * (0.25 + 0.12 * Math.sin(x * 0.021)));
+    ctx.lineTo(x, iceTop + bandH * (0.25 + 0.12 * Math.sin(x * 0.021)));
   }
   ctx.lineTo(w, iceBot);
   ctx.lineTo(0, iceBot);
@@ -156,14 +169,14 @@ export function drawNearScenery(ctx: CanvasRenderingContext2D, w: number, h: num
 
   // Waterline band at the ice's underside.
   ctx.fillStyle = 'rgba(150,195,215,0.75)';
-  ctx.fillRect(0, iceBot - h * 0.3, w, h * 0.3);
+  ctx.fillRect(0, iceBot - bandH * 0.3, w, bandH * 0.3);
 
   // Crack hatching.
   ctx.strokeStyle = 'rgba(255,255,255,0.55)';
   ctx.lineWidth = 1;
   for (let i = 0; i < 9; i++) {
     const sx = ((i * 137) % 100) / 100 * w;
-    const sy = iceTop + h * (0.45 + ((i * 53) % 40) / 100);
+    const sy = iceTop + bandH * (0.45 + ((i * 53) % 40) / 100);
     ctx.beginPath();
     ctx.moveTo(sx, sy);
     ctx.lineTo(sx + 10 + (i % 3) * 7, sy + 1.5);
@@ -217,8 +230,9 @@ export function drawSeabed(ctx: CanvasRenderingContext2D, w: number, h: number, 
     ctx.fill();
   }
 
-  // Icicles hanging from the ice ceiling, just under the horizon/lid.
-  const y0 = h * HORIZON_FRAC + 26;
+  // Icicles hanging from the ice ceiling, just under the ice band (see
+  // `iceBand` / `drawNearScenery` above — same seam the water `lid` uses).
+  const y0 = iceBand(h).bot;
   ctx.fillStyle = 'rgba(190,224,240,0.5)';
   for (let i = 0; i < 16; i++) {
     const x = prnd(i, 81) * w;

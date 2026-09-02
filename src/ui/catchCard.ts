@@ -83,6 +83,9 @@ export class CatchCard {
     return this.root != null;
   }
 
+  /** true while the card is on screen — the world tap handler defers to it */
+  get visible(): boolean { return !!this.root && this.root.isConnected; }
+
   show(container: HTMLElement, data: CatchCardData): void {
     this.hide();
 

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Locations — all six, day/dusk/night</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #14181f;
+      color: #e6e9ef;
+      font: 13px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      padding: 16px 20px 60px;
+    }
+    h1 { font-size: 18px; margin: 0 0 4px; }
+    h1 + p { margin: 0 0 24px; color: #9aa3b2; max-width: 80ch; }
+    section {
+      margin: 0 0 36px;
+      padding-top: 14px;
+      border-top: 1px solid #2a2f3a;
+    }
+    h2 { font-size: 14px; margin: 0 0 4px; color: #ffd23a; }
+    p.note { margin: 0 0 10px; color: #9aa3b2; max-width: 100ch; white-space: pre-wrap; }
+    .grid { display: flex; flex-wrap: wrap; gap: 10px; }
+    figure { margin: 0; background: #000; border: 1px solid #3a3f4a; border-radius: 4px; padding: 4px; position: relative; }
+    figure canvas { display: block; width: 175px; height: 379px; }
+    figcaption { font-size: 10px; color: #b7bfcc; text-align: center; padding-top: 3px; }
+    #bands {
+      white-space: pre;
+      font: 12px/1.5 ui-monospace, Consolas, monospace;
+      background: #0c0f14;
+      border: 1px solid #2a2f3a;
+      border-radius: 4px;
+      padding: 10px 14px;
+      overflow-x: auto;
+    }
+  </style>
+</head>
+<body>
+  <h1>Locations — day / dusk / night</h1>
+  <p>
+    Full-screen composite (gradient + far + near + seabed + platform prop) for each of the
+    six locations at the logical 390×844 portrait box. Plain Canvas 2D, no Atlas/Baker/PixiJS —
+    see `locationsDev.ts` header. Measured ink bands (read back from a plain canvas, see the
+    "Measured bands" section) are the numbers that went into `locationsArt.ts`'s `bands` blocks.
+  </p>
+  <div id="bands"></div>
+  <div id="app"></div>
+  <script type="module" src="/dev/locationsDev.ts"></script>
+</body>
+</html>
