@@ -3,7 +3,7 @@ import { baker } from '@/bake/baker';
 import { standalone } from '@/bake/standalone';
 import { Scene } from '@/world/scene';
 import { Shoal } from '@/world/shoal';
-import { Tackle } from '@/world/tackle';
+import { Angler, type AnglerPose } from '@/world/angler';
 import { layout } from '@/engine/layout';
 import { LAKE, lakeArt, makeDock, setSkyGloom, setSkyPhase, skyGloomStep, skyStateFor, DAY_SECONDS } from './lake';
 import { Weather } from '@/world/weather';
@@ -77,7 +77,15 @@ export async function startGame(): Promise<void> {
   const shoal = new Shoal(scene, { count, distantCount: distant });
   shoal.setLocation(LAKE.id, false);
 
-  const tackle = new Tackle(scene);
+  // The angler owns the figure, the rod AND the line/bobber/hook — its own
+  // renderer already draws them from the rod tip, so the separate Tackle
+  // pass is gone rather than drawing a second line beside it.
+  const angler = new Angler(scene, {
+    outfit: session0Look().outfit,
+    hat: session0Look().hat,
+    rodSkin: session0Look().rodSkin,
+    bobber: session0Look().bobber,
+  });
   const weather = new Weather(scene, baker.sprites.textureSource, scene.stamps);
 
   // --- the HUD and the menus, as small DOM elements over the canvas -------
@@ -170,19 +178,16 @@ export async function startGame(): Promise<void> {
     shoal.update(dt, t, sky.light, wBot);
 
     const st = session.state;
-    const tip = { x: engine.W * 0.72, y: scene.horizonY - 62 };
     const lineOut = st.phase !== 'ready' && st.phase !== 'casting';
-    tackle.update(t, {
-      tipX: tip.x,
-      tipY: tip.y,
+    angler.update(dt, t, {
+      pose: poseFor(st.phase),
+      light: sky.light,
+      aimX: st.bobberX / Math.max(1, engine.W),
+      aimY: st.bobberY / Math.max(1, engine.H),
       bobberX: lineOut ? st.bobberX : null,
       bobberY: lineOut ? st.bobberY : null,
-      hookX: st.hookX,
-      hookY: st.hookY,
       tension: st.reel?.tension ?? 0,
-      fighting: st.phase === 'reeling' || st.phase === 'biting',
-      lureRadius: session.view().lureRadius,
-      light: sky.light,
+      holding: st.isHolding,
     });
 
     bubbleTimer -= dt;
@@ -262,13 +267,35 @@ export async function startGame(): Promise<void> {
   window.visualViewport?.addEventListener('resize', onResize);
 
   (window as unknown as { __game: unknown }).__game = {
-    scene, shoal, session, tackle, hud, weather, screens, catchCard, baker, standalone, engine,
+    scene, shoal, session, angler, hud, weather, screens, catchCard, baker, standalone, engine,
     openScreen,
     /** dev only: freeze the simulation while still rendering, so a still
      *  frame can be captured of a state that only lasts a moment. */
     freeze: (on: boolean) => { engine.app.ticker.speed = on ? 0 : 1; },
     report: () => `${scene.report()}  ${baker.report()}  scn ${standalone.report().mb}MB  ${layout.W}x${layout.H}@${layout.dpr}  ${session.state.phase}`,
   };
+}
+
+/**
+ * The game's phase names and the angler's pose names are deliberately
+ * separate vocabularies — the renderer should not have to know that
+ * "retrieving" exists — so one small table maps between them.
+ */
+function poseFor(phase: string): AnglerPose {
+  switch (phase) {
+    case 'casting': return 'casting';
+    case 'waiting': return 'waiting';
+    case 'biting': return 'biting';
+    case 'reeling': case 'bossfight': return 'reeling';
+    case 'caught': return 'caught';
+    case 'retrieving': return 'lost';
+    default: return 'idle';
+  }
+}
+
+/** what the angler is wearing; the equipment screen will drive this later */
+function session0Look(): { outfit: string; hat: string; rodSkin: string; bobber: string } {
+  return { outfit: 'standard', hat: 'none', rodSkin: 'standard', bobber: 'standard' };
 }
 
 /** the session's view plus the clock, in the shape the HUD wants */

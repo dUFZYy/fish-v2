@@ -97,6 +97,26 @@ const ROD_WORLD_S = 60;         // rodBendCurve's own "s" — world-px shaft thi
 const ROD_WORLD_LEN = 130;      // on-screen rod length, grip to its (unbent) rest tip
 const ROD_SEGMENTS = 10;
 
+/**
+ * How tall the whole figure should stand, as a fraction of screen height.
+ *
+ * All the piece sizes above are absolute bake pixels, chosen for detail. On
+ * a wide dev page that happened to look right; on a 390x844 phone it made
+ * the angler 25 % of the screen tall — the old game's angler is about 16 %,
+ * a small figure sitting on a jetty rather than a giant looming over it.
+ *
+ * So the bakes keep their generous sizes (they are drawn at device density
+ * and stay sharp) and everything is PLACED through one factor derived from
+ * the screen. Measured: the assembled figure is 209 logical px tall at
+ * scale 1.
+ */
+const FIGURE_H_FRAC = 0.16;
+const FIGURE_H_AT_SCALE_1 = 209;
+
+function figureScale(): number {
+  return (layout.H * FIGURE_H_FRAC) / FIGURE_H_AT_SCALE_1;
+}
+
 /** drawRod's own constants (draw.js:595-693 port), mirrored here so the live
  * bend mesh samples the SAME texture fractions the straight bake drew into:
  * `gripLen = w*0.12` (rodAttach) and the shaft taper `w0=h*0.4 .. w1=h*0.125`. */
@@ -217,8 +237,27 @@ export class Angler {
     }
     this.rodVerts = new Float32Array(n * 4);
     this.rRodVerts = new Float32Array(n * 4);
-    this.rodMesh = new MeshSimple({ texture: this.rodTex, vertices: this.rodVerts.slice(), uvs, topology: 'triangle-strip' });
-    this.rRodMesh = new MeshSimple({ texture: this.rodTex, vertices: this.rRodVerts.slice(), uvs, topology: 'triangle-strip' });
+
+    // The ribbon needs its own index list.
+    //
+    // MeshSimple with no indices builds MeshGeometry's default quad,
+    // [0,1,2, 0,2,3] — six indices, whatever the vertex count. So a
+    // 22-vertex rod drew only its FIRST segment and the rod looked like a
+    // 20 px stub in the angler's hand while its geometry was correctly 84 px
+    // long. Nothing warns about this; the mesh simply renders a fraction of
+    // itself.
+    //
+    // Written as an explicit triangle LIST rather than relying on
+    // triangle-strip winding, because a list is unambiguous and this ribbon
+    // is rebuilt every frame.
+    const indices = new Uint32Array((n - 1) * 6);
+    for (let i = 0; i < n - 1; i++) {
+      const a = i * 2, b = a + 1, c = a + 2, d = a + 3;
+      indices.set([a, b, c, b, d, c], i * 6);
+    }
+
+    this.rodMesh = new MeshSimple({ texture: this.rodTex, vertices: this.rodVerts.slice(), uvs, indices, topology: 'triangle-list' });
+    this.rRodMesh = new MeshSimple({ texture: this.rodTex, vertices: this.rRodVerts.slice(), uvs, indices: indices.slice(), topology: 'triangle-list' });
 
     // --- assemble the main figure ---
     this.armWrap.addChild(this.armSprite);
@@ -237,7 +276,11 @@ export class Angler {
     // --- reflection twin, mirrored + faded, below the water pass ---
     this.rArmWrap.addChild(this.rArmSprite);
     this.reflection.addChild(this.rBody, this.rArmWrap, this.rHead, this.rHat, this.rRodMesh);
-    this.reflection.alpha = 0.35;
+    // A reflection seen at a low angle across water is FLATTER and fainter
+    // than the thing it mirrors — a full-height, 35 % copy read as a second
+    // angler swimming under the jetty. Compressed to 0.78 and faded to 0.2,
+    // it reads as a reflection.
+    this.reflection.alpha = 0.2;
     scene.reflectionLayer.addChild(this.reflection);
 
     this.update(0, 0, DEFAULT_STATE);
@@ -316,67 +359,69 @@ export class Angler {
 
     // --- dock anchor (CLAUDE.md/lake.ts: dock anchored right, DOCK_W_FRAC
     // wide, deck top 20px above the horizon) ---
+    const k = figureScale();
     const dockW = Math.round(layout.W * DOCK_W_FRAC);
     const dockX = layout.W - dockW;
     const deckTopY = this.scene.horizonY - 20;
-    const baseX = dockX + dockW * 0.32;
+    // 0.42 rather than 0.32 across the deck: at 0.32 he stood on the very
+    // end of the jetty with his boots past its left edge.
+    const baseX = dockX + dockW * 0.42;
 
     // --- idle breathe: a LIVE translate on the torso+head, never baked ---
-    const bodyS = BODY_S / 4.3;
-    const breathe = Math.sin(t * 1.6) * bodyS * 0.03;
+    const breathe = Math.sin(t * 1.6) * BODY_S * k * 0.007;
 
     this.bodySprite.texture = bodyTex;
-    this.bodySprite.setSize(BODY_W, BODY_H_PHYS);
-    this.bodySprite.x = baseX - BODY_W / 2;
-    this.bodySprite.y = deckTopY - BODY_H_PHYS + breathe;
+    this.bodySprite.setSize(BODY_W * k, BODY_H_PHYS * k);
+    this.bodySprite.x = baseX - (BODY_W * k) / 2;
+    this.bodySprite.y = deckTopY - BODY_H_PHYS * k + breathe;
 
     const worldShoulder: Pt = {
-      x: this.bodySprite.x + this.bodyAttach.shoulder.x,
-      y: this.bodySprite.y + this.bodyAttach.shoulder.y,
+      x: this.bodySprite.x + this.bodyAttach.shoulder.x * k,
+      y: this.bodySprite.y + this.bodyAttach.shoulder.y * k,
     };
     const worldHeadCenter: Pt = {
-      x: this.bodySprite.x + this.bodyAttach.headCenter.x,
-      y: this.bodySprite.y + this.bodyAttach.headCenter.y,
+      x: this.bodySprite.x + this.bodyAttach.headCenter.x * k,
+      y: this.bodySprite.y + this.bodyAttach.headCenter.y * k,
     };
 
     this.headSprite.texture = headTex;
-    this.headSprite.setSize(HEAD_W, HEAD_S);
-    this.headSprite.x = worldHeadCenter.x - this.headAttach.center.x;
-    this.headSprite.y = worldHeadCenter.y - this.headAttach.center.y;
+    this.headSprite.setSize(HEAD_W * k, HEAD_S * k);
+    this.headSprite.x = worldHeadCenter.x - this.headAttach.center.x * k;
+    this.headSprite.y = worldHeadCenter.y - this.headAttach.center.y * k;
 
     this.hatSprite.texture = hatTex;
-    this.hatSprite.setSize(HAT_W, HAT_H_PHYS);
-    this.hatSprite.x = worldHeadCenter.x - this.hatPts.center.x;
-    this.hatSprite.y = worldHeadCenter.y - (this.hatPts.center.y + HAT_PAD_TOP);
+    this.hatSprite.setSize(HAT_W * k, HAT_H_PHYS * k);
+    this.hatSprite.x = worldHeadCenter.x - this.hatPts.center.x * k;
+    this.hatSprite.y = worldHeadCenter.y - (this.hatPts.center.y + HAT_PAD_TOP) * k;
 
     // --- arm: baked bent-elbow pose, rotated live around the shoulder ---
     const aimAngle = this.aimAngleFor(s, t, worldShoulder);
     const armRot = aimAngle - this.restArmAngle;
     this.armSprite.texture = armTex;
-    this.armSprite.setSize(ARM_W, ARM_S);
-    this.armWrap.pivot.set(this.armPts.shoulder.x, this.armPts.shoulder.y);
+    this.armSprite.setSize(ARM_W * k, ARM_S * k);
+    this.armWrap.pivot.set(this.armPts.shoulder.x * k, this.armPts.shoulder.y * k);
     this.armWrap.position.set(worldShoulder.x, worldShoulder.y);
     this.armWrap.rotation = armRot;
 
     // hand/grip in world space — see the header derivation: rotating the
     // baked (shoulder->hand) vector by `armRot` always lands it at `aimAngle`.
     const handWorld: Pt = {
-      x: worldShoulder.x + this.armHandLen * Math.cos(aimAngle),
-      y: worldShoulder.y + this.armHandLen * Math.sin(aimAngle),
+      x: worldShoulder.x + this.armHandLen * k * Math.cos(aimAngle),
+      y: worldShoulder.y + this.armHandLen * k * Math.sin(aimAngle),
     };
 
     // --- rod: bend curve from the hand to a rest tip along the aim, biased
     // toward the bobber; drawn as one MeshSimple strip (never a re-bake) ---
     const restTip: Pt = {
-      x: handWorld.x + ROD_WORLD_LEN * Math.cos(aimAngle),
-      y: handWorld.y + ROD_WORLD_LEN * Math.sin(aimAngle),
+      x: handWorld.x + ROD_WORLD_LEN * k * Math.cos(aimAngle),
+      y: handWorld.y + ROD_WORLD_LEN * k * Math.sin(aimAngle),
     };
     const bobberTargetX = s.bobberX ?? restTip.x;
     const bend = clamp(s.tension, 0, 1);
     const points = rodBendCurve({
       gripX: handWorld.x, gripY: handWorld.y,
       rodTipX: restTip.x, rodTipY: restTip.y,
-      bobberX: bobberTargetX, bend, s: ROD_WORLD_S, segments: ROD_SEGMENTS,
+      bobberX: bobberTargetX, bend, s: ROD_WORLD_S * k, segments: ROD_SEGMENTS,
     });
     for (let i = 0; i < points.length; i++) {
       const p = points[i]!;
@@ -425,17 +470,17 @@ export class Angler {
 
     // --- reflection: mirrored copies, alpha 0.35, slow horizontal wobble ---
     this.rBody.texture = bodyTex;
-    this.rBody.setSize(BODY_W, BODY_H_PHYS);
+    this.rBody.setSize(BODY_W * k, BODY_H_PHYS * k);
     this.rBody.x = this.bodySprite.x;
     this.rBody.y = this.bodySprite.y;
 
     this.rHead.texture = headTex;
-    this.rHead.setSize(HEAD_W, HEAD_S);
+    this.rHead.setSize(HEAD_W * k, HEAD_S * k);
     this.rHead.x = this.headSprite.x;
     this.rHead.y = this.headSprite.y;
 
     this.rHat.texture = hatTex;
-    this.rHat.setSize(HAT_W, HAT_H_PHYS);
+    this.rHat.setSize(HAT_W * k, HAT_H_PHYS * k);
     this.rHat.x = this.hatSprite.x;
     this.rHat.y = this.hatSprite.y;
 
@@ -448,9 +493,13 @@ export class Angler {
     this.rRodVerts.set(this.rodVerts);
     this.rRodMesh.vertices = this.rRodVerts;
 
-    this.reflection.x = Math.sin(t * 0.6) * 5;
-    this.reflection.y = 2 * this.scene.horizonY;
-    this.reflection.scale.y = -1;
+    const squash = 0.78;
+    this.reflection.x = Math.sin(t * 0.6) * 4;
+    // Mirror about the water line, then compress toward it: with a scale of
+    // -squash the pivot has to move by the same factor or the reflection
+    // drifts away from the figure's feet.
+    this.reflection.y = this.scene.horizonY * (1 + squash);
+    this.reflection.scale.y = -squash;
   }
 
   destroy(): void {
