@@ -141,6 +141,15 @@ export class Scene {
    * bucket became a slab across the sky.
    */
   readonly nearProps = new Container();
+  /**
+   * Above the sky gradient, BEHIND the far scenery.
+   *
+   * The arctic's aurora belongs here: it moves, so it cannot be baked into
+   * the gradient strip, and it has to sit behind the icebergs rather than in
+   * front of them. Also the right home for the sun, the moon, the stars and
+   * the clouds, which are all sky objects that move.
+   */
+  readonly skyLayer = new Container();
 
   constructor(atlas: TextureSource, w: number, h: number, hooks: ParticleHooks = {}) {
     this.W = w;
@@ -170,6 +179,7 @@ export class Scene {
 
     this.root.addChild(
       this.bgSprite,          // 0
+      this.skyLayer,          // 0.5 — sun/moon/clouds/aurora, behind the scenery
       far,                    // 1
       mid,                    // 2
       this.seabedSprite,      // 4

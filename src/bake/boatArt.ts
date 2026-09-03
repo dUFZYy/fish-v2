@@ -230,10 +230,23 @@ export interface BoatDims { L: number; fb: number; d: number; originX: number; o
 
 export function boatDims(w: number, h: number): BoatDims {
   const k = 1.15 / 1.3;
-  const d = h / (1.5 * k + 0.55);
+  // The box has to hold the WHOLE boat, and the underwater half is clipped
+  // to 2d below the waterline (drawBoatUnderwater's rect). With the old
+  // divisor the box only had 0.55d of room below the origin, so the
+  // submerged hull was cut off 31 px down and the boat appeared to sit ON
+  // the water instead of in it.
+  //
+  //   above the line: originY = 1.5 * fb = 1.5 * k * d
+  //   below the line: 2 * d
+  //   so h = d * (1.5k + 2) = d * 3.327
+  const d = h / (1.5 * k + 2);
   const fb = k * d;
-  const L = w / 0.94;
-  return { L, fb, d, originX: 0.5 * L, originY: 1.5 * fb };
+  // L = w/0.94 put the hull's half-length at 0.53w and its origin at 0.53w
+  // too, so the hull spanned 0..1.06w and its stern was clipped square by
+  // the bake box — a boat with a corner cut off. 1.06 leaves the hull inside
+  // a w-wide box with a small margin, and the origin is simply the centre.
+  const L = w / 1.06;
+  return { L, fb, d, originX: w / 2, originY: 1.5 * fb };
 }
 
 /** Hull outline (`boatHullPath`, locations.js:219), boat-centered coordinates. */

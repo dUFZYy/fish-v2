@@ -237,7 +237,13 @@ export function artFor(loc: Location): SceneArt {
 
 /** The boat: 3 layered sprites (underwater hull, topside, front), shared by `boot` and `riff`. */
 export const BOAT_W_FRAC = 0.58;
-export const BOAT_H = 150;
+/**
+ * The box height, not the boat's size — see boatDims. The old game's gunwale
+ * sits about 45 px above the water line, which with fb = 0.885*d and
+ * h = 3.327*d back-solves to h ≈ 168: freeboard 45, submerged hull 101,
+ * waterline 67 px down the box.
+ */
+export const BOAT_H = 168;
 
 export interface BoatSprites {
   /** before the water pass */

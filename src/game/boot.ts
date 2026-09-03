@@ -5,7 +5,10 @@ import { Scene } from '@/world/scene';
 import { Shoal } from '@/world/shoal';
 import { Angler, type AnglerPose } from '@/world/angler';
 import { layout } from '@/engine/layout';
-import { LAKE, lakeArt, makeDock, setSkyGloom, setSkyPhase, skyGloomStep, skyStateFor, DAY_SECONDS } from './lake';
+import { LAKE, setSkyGloom, setSkyPhase, skyGloomStep, skyStateFor, DAY_SECONDS } from './lake';
+import { artFor } from './locationsArt';
+import { buildPlaceProps, type PlaceProps } from './place';
+import { LOCATIONS, getLocationById, type Location } from '@/data/locations';
 import { Weather } from '@/world/weather';
 import { Session } from './session';
 import { audio } from '@/audio/engine';
@@ -47,8 +50,8 @@ export async function startGame(): Promise<void> {
     if (soundStarted || !audio.ready) return;
     soundStarted = true;
     music.start();
-    music.setMood('see');
-    setAmbience(LAKE.id, false);
+    music.setMood(moodFor(loc.id));
+    setAmbience(loc.id, false);
   };
   for (const ev of ['pointerdown', 'keydown'] as const) {
     window.addEventListener(ev, () => { audio.init(); startSound(); }, { passive: true });
@@ -60,22 +63,41 @@ export async function startGame(): Promise<void> {
   engine.world.addChild(scene.root);
   if (!waterOn) scene.water.mesh.visible = false;
 
-  const art = lakeArt(LAKE);
-  // The scenery's cache key must include the gloom step, or a shower would
-  // grey the sky strip and leave the baked hills sunny.
-  const artId = art.id;
-  Object.defineProperty(art, 'id', { get: () => `${artId}:g${skyGloomStep()}` });
   let dayTime = frozenDay ?? 0.42;
   setSkyPhase(dayTime);
-  scene.setArt(art, skyStateFor(dayTime, engine.W, engine.H, LAKE).light);
-
-  // The dock is a placed sprite in the near parallax group, not part of the
-  // screen-sized near bake — see makeDock for why.
-  let dock = makeDock(scene.horizonY, skyStateFor(dayTime, engine.W, engine.H, LAKE).light);
-  scene.nearProps.addChild(dock);
 
   const shoal = new Shoal(scene, { count, distantCount: distant });
-  shoal.setLocation(LAKE.id, false);
+
+  // --- the current place ---------------------------------------------------
+  // Switching location is a scene-art swap, a prop rebuild and a shoal
+  // refill; nothing reloads and nothing else in the renderer changes. That
+  // is the whole payoff of the SceneArt seam.
+  let loc: Location = getLocationById(p.get('loc') ?? '') ?? LAKE;
+  let art = artFor(loc);
+  let props: PlaceProps | null = null;
+
+  const enterPlace = (next: Location) => {
+    loc = next;
+    art = artFor(loc);
+    // The gloom step belongs in the cache key, or a shower would grey the sky
+    // strip and leave the baked hills sunny.
+    const baseId = art.id;
+    Object.defineProperty(art, 'id', { get: () => `${baseId}:g${skyGloomStep()}` });
+
+    const light = skyStateFor(dayTime, engine.W, engine.H, loc).light;
+    scene.setArt(art, light);
+
+    props?.destroy();
+    props = buildPlaceProps(scene, loc, light);
+
+    const night = light < 0.35;
+    shoal.setLocation(loc.id, night);
+    if (soundStarted) {
+      music.setMood(moodFor(loc.id));
+      setAmbience(loc.id, night);
+    }
+  };
+  enterPlace(loc);
 
   // The angler owns the figure, the rod AND the line/bobber/hook — its own
   // renderer already draws them from the rod tip, so the separate Tackle
@@ -171,7 +193,7 @@ export async function startGame(): Promise<void> {
     }
     weather.update(dt, t);
     setSkyGloom(weather.gloom);
-    const sky = skyStateFor(dayTime, engine.W, engine.H, LAKE);
+    const sky = skyStateFor(dayTime, engine.W, engine.H, loc);
     const wBot = art.waterBottom(sky.light);
 
     session.update(dt);
@@ -257,23 +279,39 @@ export async function startGame(): Promise<void> {
     scene.resize(engine.W, engine.H);
     baker.invalidateAll();
     standalone.clear();
-    const light = skyStateFor(dayTime, engine.W, engine.H, LAKE).light;
-    scene.setArt(art, light);
-    dock.destroy();
-    dock = makeDock(scene.horizonY, light);
-    scene.nearProps.addChild(dock);
+    // sizes are in every bake key, so a resize re-enters the place
+    enterPlace(loc);
   };
   window.addEventListener('resize', onResize);
   window.visualViewport?.addEventListener('resize', onResize);
 
   (window as unknown as { __game: unknown }).__game = {
     scene, shoal, session, angler, hud, weather, screens, catchCard, baker, standalone, engine,
+    get loc() { return loc; },
+    LOCATIONS,
+    enterPlace,
     openScreen,
     /** dev only: freeze the simulation while still rendering, so a still
      *  frame can be captured of a state that only lasts a moment. */
     freeze: (on: boolean) => { engine.app.ticker.speed = on ? 0 : 1; },
     report: () => `${scene.report()}  ${baker.report()}  scn ${standalone.report().mb}MB  ${layout.W}x${layout.H}@${layout.dpr}  ${session.state.phase}`,
   };
+}
+
+/**
+ * Location ids and music mood ids happen to line up for the six spots, but
+ * they are different vocabularies and the music engine only knows eight
+ * moods — so the mapping is explicit rather than a cast.
+ */
+function moodFor(locId: string): 'see' | 'boot' | 'kueste' | 'riff' | 'tiefsee' | 'arktis' | 'hub' | 'boss' {
+  switch (locId) {
+    case 'boot': return 'boot';
+    case 'kueste': return 'kueste';
+    case 'riff': return 'riff';
+    case 'tiefsee': return 'tiefsee';
+    case 'arktis': return 'arktis';
+    default: return 'see';
+  }
 }
 
 /**
