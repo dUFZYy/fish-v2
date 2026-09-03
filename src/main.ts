@@ -2,7 +2,9 @@ import { engine } from './engine/app';
 import { PerfHud } from './engine/perf';
 
 async function boot(): Promise<void> {
-  await engine.init({ quality: 'auto' });
+  const q = new URLSearchParams(location.search).get('q');
+  const quality = q === 'sharp' || q === 'balanced' || q === 'perf' ? q : 'auto';
+  await engine.init({ quality });
 
   if (/[?&]perf=1/.test(location.search)) {
     const hud = new PerfHud(engine.perf, () => engine.currentTier);

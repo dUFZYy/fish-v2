@@ -12,3 +12,9 @@ android/local.properties
 *.keystore
 .env
 .env.*
+
+# Capacitor native build output (the projects themselves are checked in)
+ios/App/Pods/
+ios/App/App/public/
+android/app/src/main/assets/public/
+android/.idea/

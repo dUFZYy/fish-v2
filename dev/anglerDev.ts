@@ -69,6 +69,7 @@ async function boot(): Promise<void> {
     bobberX: null, bobberY: null, tension: 0, holding: false,
   };
   const angler = new Angler(scene, { outfit: 'klassisch', hat: 'angler', rodSkin: 'holz', bobber: 'classic' });
+  (window as unknown as Record<string, unknown>).__dbg = { scene, angler, dock, layout };
 
   // --- bobber-out toggle: parks the bobber a bit out on the water so the
   // line/bobber/hook assembly can be checked too ---

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">A Silly Fishing Game</string>
+    <string name="title_activity_main">A Silly Fishing Game</string>
+    <string name="package_name">de.fishingadventure.app</string>
+    <string name="custom_url_scheme">de.fishingadventure.app</string>
+</resources>

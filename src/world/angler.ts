@@ -222,7 +222,6 @@ export class Angler {
 
     // --- assemble the main figure ---
     this.armWrap.addChild(this.armSprite);
-    this.armSprite.setSize(ARM_W, ARM_S);
     this.figure.addChild(this.bodySprite, this.armWrap, this.headSprite, this.hatSprite, this.rodMesh);
     scene.anglerLayer.addChild(this.figure);
 
@@ -237,7 +236,6 @@ export class Angler {
 
     // --- reflection twin, mirrored + faded, below the water pass ---
     this.rArmWrap.addChild(this.rArmSprite);
-    this.rArmSprite.setSize(ARM_W, ARM_S);
     this.reflection.addChild(this.rBody, this.rArmWrap, this.rHead, this.rHat, this.rRodMesh);
     this.reflection.alpha = 0.35;
     scene.reflectionLayer.addChild(this.reflection);
@@ -355,6 +353,7 @@ export class Angler {
     const aimAngle = this.aimAngleFor(s, t, worldShoulder);
     const armRot = aimAngle - this.restArmAngle;
     this.armSprite.texture = armTex;
+    this.armSprite.setSize(ARM_W, ARM_S);
     this.armWrap.pivot.set(this.armPts.shoulder.x, this.armPts.shoulder.y);
     this.armWrap.position.set(worldShoulder.x, worldShoulder.y);
     this.armWrap.rotation = armRot;
@@ -441,6 +440,7 @@ export class Angler {
     this.rHat.y = this.hatSprite.y;
 
     this.rArmSprite.texture = armTex;
+    this.rArmSprite.setSize(ARM_W, ARM_S);
     this.rArmWrap.pivot.copyFrom(this.armWrap.pivot);
     this.rArmWrap.position.copyFrom(this.armWrap.position);
     this.rArmWrap.rotation = this.armWrap.rotation;
