@@ -93,8 +93,8 @@ const HAT_H_PHYS = HAT_S + HAT_PAD_TOP;
 
 const ROD_TEX_W = 150;
 const ROD_TEX_H = 34;
-const ROD_WORLD_S = 42;         // rodBendCurve's own "s" — world-px shaft thickness at the grip
-const ROD_WORLD_LEN = 150;      // on-screen rod length, grip to its (unbent) rest tip
+const ROD_WORLD_S = 60;         // rodBendCurve's own "s" — world-px shaft thickness at the grip
+const ROD_WORLD_LEN = 130;      // on-screen rod length, grip to its (unbent) rest tip
 const ROD_SEGMENTS = 10;
 
 /** drawRod's own constants (draw.js:595-693 port), mirrored here so the live
@@ -274,7 +274,7 @@ export class Angler {
   private aimAngleFor(s: AnglerState, t: number, shoulder: Pt): number {
     switch (s.pose) {
       case 'idle':
-        return -0.55 + Math.sin(t * 1.1) * 0.04;
+        return -0.42 + Math.sin(t * 1.1) * 0.04;
       case 'aiming':
       case 'casting': {
         const tx = s.aimX * layout.W, ty = s.aimY * layout.H;

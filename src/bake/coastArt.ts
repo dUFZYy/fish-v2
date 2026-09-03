@@ -197,20 +197,69 @@ export function drawPier(ctx: CanvasRenderingContext2D, w: number, h: number, li
   roundRectPath(ctx, w * 0.7, deckY - s * 1.2, s * 0.6, s * 1.2, Math.min(4, s * 0.1));
   ctx.fill();
 
-  // Lighthouse: white shaft, red band, black cap.
-  ctx.fillStyle = dim('#f2f2f2', light);
-  ctx.fillRect(w * 0.86, deckY - s * 4.5, s * 1.3, s * 4.5);
+  // Lighthouse.
+  //
+  // Moved in from w*0.86 to w*0.78: at the old position its cap overhung the
+  // sprite's right edge and was clipped by the bake, so it read as a striped
+  // pole floating at the screen edge. It also has a base now — a tower that
+  // starts in mid-air is the thing the eye notices first.
+  const lx = w * 0.78;
+  const lw = s * 1.25;
+  const top = deckY - s * 4.6;
+
+  // splayed base
+  ctx.fillStyle = dim('#dcdcdc', light);
+  ctx.beginPath();
+  ctx.moveTo(lx - lw * 0.22, deckY);
+  ctx.lineTo(lx + lw * 1.22, deckY);
+  ctx.lineTo(lx + lw * 0.98, deckY - s * 0.5);
+  ctx.lineTo(lx + lw * 0.02, deckY - s * 0.5);
+  ctx.closePath();
+  ctx.fill();
+
+  // shaft, tapering, with a soft shaded side so it is a cylinder
+  const sg = ctx.createLinearGradient(lx, 0, lx + lw, 0);
+  sg.addColorStop(0, dim('#cfcfcf', light));
+  sg.addColorStop(0.35, dim('#f6f6f6', light));
+  sg.addColorStop(1, dim('#b9bcc0', light));
+  ctx.fillStyle = sg;
+  ctx.beginPath();
+  ctx.moveTo(lx + lw * 0.02, deckY - s * 0.5);
+  ctx.lineTo(lx + lw * 0.98, deckY - s * 0.5);
+  ctx.lineTo(lx + lw * 0.86, top);
+  ctx.lineTo(lx + lw * 0.14, top);
+  ctx.closePath();
+  ctx.fill();
+
+  // red band
   ctx.fillStyle = dim('#e63946', light);
-  ctx.fillRect(w * 0.86, deckY - s * 3.4, s * 1.3, s * 1.1);
+  ctx.beginPath();
+  ctx.moveTo(lx + lw * 0.07, deckY - s * 2.1);
+  ctx.lineTo(lx + lw * 0.93, deckY - s * 2.1);
+  ctx.lineTo(lx + lw * 0.90, deckY - s * 3.0);
+  ctx.lineTo(lx + lw * 0.10, deckY - s * 3.0);
+  ctx.closePath();
+  ctx.fill();
+
+  // lamp room and cap
   ctx.fillStyle = dim('#2a2a30', light);
-  ctx.fillRect(w * 0.84, deckY - s * 5.0, s * 1.7, s * 0.5);
+  ctx.fillRect(lx + lw * 0.04, top - s * 0.62, lw * 0.92, s * 0.62);
+  ctx.fillStyle = dim('#ffe9a8', light);
+  ctx.fillRect(lx + lw * 0.16, top - s * 0.52, lw * 0.68, s * 0.34);
+  ctx.fillStyle = dim('#1d1d22', light);
+  ctx.beginPath();
+  ctx.moveTo(lx - lw * 0.06, top - s * 0.62);
+  ctx.lineTo(lx + lw * 1.06, top - s * 0.62);
+  ctx.lineTo(lx + lw * 0.5, top - s * 1.05);
+  ctx.closePath();
+  ctx.fill();
 }
 
 /** The lighthouse lamp's box-local position/radius, for the caller's live beam overlay (see file header). */
 export function lighthouseLamp(w: number, h: number): { x: number; y: number; r: number } {
   const s = h / 6;
   const deckY = 5 * s;
-  return { x: w * 0.86 + s * 0.65, y: deckY - s * 4.75, r: s * 0.4 };
+  return { x: w * 0.78 + s * 0.625, y: deckY - s * 4.95, r: s * 0.4 };
 }
 
 function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
@@ -231,11 +280,56 @@ function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: n
  */
 export function drawPierUnderwater(ctx: CanvasRenderingContext2D, w: number, h: number, light: number): void {
   void light;
-  const stone = w / 10;
-  ctx.fillStyle = '#5a5e63';
-  for (let i = 0; i < 10; i++) ctx.fillRect(i * stone + 2, 0, stone - 4, h);
-  ctx.fillStyle = '#4a4e53';
-  const h2y = h * 0.417;
-  const h2h = h * 0.583;
-  for (let i = 0; i < 5; i++) ctx.fillRect(i * stone * 2 + stone * 0.5, h2y, stone * 1.2, h2h);
+  // A stone mole is a WALL. The first port drew ten free-standing columns
+  // with gaps between them, which read as a fence lying in the water rather
+  // than as masonry — the same mistake the lake's dock made with its deck.
+  // So: a solid face with courses and staggered joints, darkening with
+  // depth, and a slightly proud lower course where it meets the bed.
+  const g = ctx.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, '#666b70');
+  g.addColorStop(0.55, '#565b60');
+  g.addColorStop(1, '#3f4348');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+
+  const courses = 6;
+  const ch = h / courses;
+  ctx.lineWidth = Math.max(1, w * 0.004);
+  for (let r = 0; r < courses; r++) {
+    const y = r * ch;
+    // horizontal bed joint
+    ctx.strokeStyle = 'rgba(20,24,28,0.35)';
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+    // staggered vertical joints, so the courses read as separate stones
+    const blocks = 5;
+    const bw = w / blocks;
+    const offset = (r % 2) * bw * 0.5;
+    for (let i = 0; i <= blocks; i++) {
+      const x = offset + i * bw;
+      if (x <= 1 || x >= w - 1) continue;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x, y + ch);
+      ctx.stroke();
+    }
+    // a highlight along the top of each course
+    ctx.strokeStyle = 'rgba(230,240,245,0.06)';
+    ctx.beginPath();
+    ctx.moveTo(0, y + 1);
+    ctx.lineTo(w, y + 1);
+    ctx.stroke();
+  }
+
+  // weed and barnacles at the waterline end, because it has stood here
+  ctx.fillStyle = 'rgba(58,96,62,0.45)';
+  for (let i = 0; i < 9; i++) {
+    const x = (i + 0.5) * (w / 9);
+    const hh = ch * (0.25 + ((i * 7) % 5) * 0.09);
+    ctx.beginPath();
+    ctx.ellipse(x, hh * 0.5, w * 0.055, hh, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
